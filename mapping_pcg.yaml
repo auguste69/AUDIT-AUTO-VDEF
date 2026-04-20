@@ -1,0 +1,457 @@
+# =============================================================================
+# MAPPING PCG EXHAUSTIF — Plan Comptable Général français
+# =============================================================================
+# Couvre TOUS les numéros de comptes possibles (classes 1 à 7)
+#
+# Logique de résolution (du plus spécifique au plus général) :
+#   1. Surcharges cabinet (section en bas)
+#   2. Préfixe 3 chiffres (ex: "486" → A)
+#   3. Préfixe 2 chiffres (ex: "48" → T)
+#   4. Classe 1 chiffre — fallback garanti, tout compte matche
+#
+# Les préfixes plus longs SURCHARGENT les plus courts.
+# Exemple : "48" → T, mais "486" → A et "487" → V
+#
+# Le mapping du FM existant du client est TOUJOURS prioritaire
+# sur cette config (il prime sur tout, y compris les surcharges).
+# =============================================================================
+
+# ---------------------------------------------------------
+# CLASSE 1 — Comptes de capitaux (10-18)
+# ---------------------------------------------------------
+classe_1:
+  "10": C Propres    # Capital et réserves
+  "11": C Propres    # Report à nouveau
+  "12": C Propres    # Résultat de l'exercice
+  "13": C Propres    # Subventions d'investissement
+  "14": C Propres    # Provisions réglementées
+  "15": C PRC        # Provisions pour risques et charges
+  "16": F            # Emprunts et dettes assimilées
+  "17": F            # Dettes rattachées à des participations
+  "18": T            # Comptes de liaison des établissements
+  "19": C Propres    # (Réservé — provisions réglementées complémentaires)
+
+# ---------------------------------------------------------
+# CLASSE 2 — Comptes d'immobilisations (20-29)
+# ---------------------------------------------------------
+classe_2:
+  "20": I Incorp     # Immobilisations incorporelles (défaut)
+  "21": I Corp       # Immobilisations corporelles
+  "22": I Corp       # Immobilisations mises en concession
+  "23": I Corp       # Immobilisations en cours
+  "24": I Corp       # (Réservé — rare)
+  "25": I Fi         # Parts dans entreprises liées
+  "26": I Fi         # Participations et créances rattachées
+  "27": I Fi         # Autres immobilisations financières
+  "28": I Corp       # Amortissements des immobilisations (défaut)
+  "29": I Corp       # Dépréciations des immobilisations (défaut)
+
+  # Surcharges 3 chiffres
+  "205": I Corp      # Concessions, brevets, licences
+  "208": I Corp      # Autres immos incorporelles (logiciels)
+  "280": I Incorp    # Amort. des immos incorporelles
+  "281": I Corp      # Amort. des immos corporelles
+  "282": I Corp      # Amort. des immos mises en concession
+  "290": I Incorp    # Dépréc. des immos incorporelles
+  "291": I Corp      # Dépréc. des immos corporelles
+  "292": I Corp      # Dépréc. des immos mises en concession
+  "293": I Corp      # Dépréc. des immos en cours
+  "296": I Fi        # Dépréc. des participations
+  "297": I Fi        # Dépréc. des autres immos financières
+
+# ---------------------------------------------------------
+# CLASSE 3 — Comptes de stocks et en-cours (31-39)
+# ---------------------------------------------------------
+classe_3:
+  "30": S            # (Réservé — stocks, couverture générique)
+  "31": S            # Matières premières
+  "32": S            # Autres approvisionnements
+  "33": S            # En-cours de production de biens
+  "34": S            # En-cours de production de services
+  "35": S            # Stocks de produits
+  "36": S            # Stocks provenant d'immobilisations
+  "37": S            # Stocks de marchandises
+  "38": S            # (Réservé)
+  "39": S            # Dépréciations des stocks
+
+# ---------------------------------------------------------
+# CLASSE 4 — Comptes de tiers (40-49)
+# ---------------------------------------------------------
+classe_4:
+  # Préfixes 2 chiffres (défauts)
+  "40": A            # Fournisseurs et comptes rattachés
+  "41": V            # Clients et comptes rattachés
+  "42": P            # Personnel et comptes rattachés
+  "43": P            # Sécurité sociale et organismes sociaux
+  "44": E            # État et collectivités publiques
+  "45": F            # Groupe et associés (défaut)
+  "46": T            # Débiteurs divers et créditeurs divers
+  "47": T            # Comptes transitoires ou d'attente
+  "48": T            # Comptes de régularisation (défaut)
+  "49": V            # Dépréciations des comptes de tiers (défaut)
+
+  # Surcharges 3 chiffres
+  "400": A
+  "401": A           # Fournisseurs
+  "402": A           # Fournisseurs (sous-traitants)
+  "403": A           # Fournisseurs - Effets à payer
+  "404": A           # Fournisseurs d'immobilisations
+  "405": A           # Fournisseurs d'immos - Effets à payer
+  "406": A           # (Réservé fournisseurs)
+  "407": A           # (Réservé fournisseurs)
+  "408": A           # Fournisseurs - Factures non parvenues
+  "409": A           # Fournisseurs débiteurs
+  "410": V
+  "411": V           # Clients
+  "412": V           # (Réservé clients)
+  "413": V           # Clients - Effets à recevoir
+  "414": V           # (Réservé clients)
+  "415": V           # (Réservé clients)
+  "416": V           # Clients douteux ou litigieux
+  "417": V           # (Réservé clients)
+  "418": V           # Clients - Produits non encore facturés
+  "419": V           # Clients créditeurs
+  "421": P           # Personnel - Rémunérations dues
+  "422": P           # Comités d'entreprise
+  "423": P           # Personnel - Avances et acomptes
+  "424": P           # Participation des salariés
+  "425": P           # Personnel - Avances et acomptes
+  "426": P           # Personnel - Dépôts
+  "427": P           # Personnel - Oppositions
+  "428": P           # Personnel - Charges à payer / produits à recevoir
+  "429": P           # Déficit à compenser (personnel)
+  "431": P           # Sécurité sociale (URSSAF)
+  "432": P           # (Réservé organismes sociaux)
+  "433": P           # (Réservé organismes sociaux)
+  "434": P           # (Réservé organismes sociaux)
+  "435": P           # (Réservé organismes sociaux)
+  "436": P           # (Réservé organismes sociaux)
+  "437": P           # Autres organismes sociaux
+  "438": P           # Organismes sociaux - Charges à payer / produits à recevoir
+  "439": P           # (Réservé organismes sociaux)
+  "441": E           # État - Subventions à recevoir
+  "442": E           # État - Impôts recouvrables sur tiers
+  "443": E           # Opérations particulières avec l'État
+  "444": E           # État - IS
+  "445": E           # État - TVA
+  "446": E           # Obligations cautionnées
+  "447": E           # Autres impôts, taxes
+  "448": E           # État - Charges à payer / produits à recevoir
+  "449": E           # Quotas d'émission
+  "451": F           # Groupe
+  "452": F           # (Réservé groupe)
+  "453": F           # (Réservé groupe)
+  "454": F           # (Réservé groupe)
+  "455": F           # Associés - Comptes courants
+  "456": C Propres   # Associés - Opérations sur le capital
+  "457": F           # Associés - Dividendes à payer
+  "458": F           # Associés - Opérations faites en commun
+  "459": F           # (Réservé associés)
+  "461": T           # Débiteurs divers
+  "462": T           # Créditeurs divers
+  "463": T           # (Réservé)
+  "464": T           # Dettes sur acquisitions de VMP
+  "465": T           # Créances sur cessions de VMP
+  "466": T           # (Réservé)
+  "467": T           # Autres comptes débiteurs ou créditeurs
+  "468": T           # Divers - Charges à payer / produits à recevoir
+  "469": T           # (Réservé)
+  "471": T           # Comptes d'attente
+  "472": T           # Comptes d'attente (créditeurs)
+  "473": T           # (Réservé)
+  "474": T           # Différences d'évaluation - Actif
+  "475": T           # Différences d'évaluation - Passif
+  "476": T           # Différences de conversion - Actif
+  "477": T           # Différences de conversion - Passif
+  "478": T           # Autres comptes transitoires
+  "481": T           # Charges à répartir sur plusieurs exercices
+  "486": A           # Charges constatées d'avance (CCA)
+  "487": V           # Produits constatés d'avance (PCA)
+  "488": T           # Comptes de répartition périodique
+  "489": T           # Quotas d'émission alloués par l'État
+  "490": V           # Dépréciations comptes clients (défaut)
+  "491": V           # Provisions pour dépréciation clients
+  "495": I Fi        # Provisions pour dépréciation participations
+  "496": T           # Provisions pour dépréciation débiteurs divers
+  "497": T           # (Réservé dépréciations)
+
+# ---------------------------------------------------------
+# CLASSE 5 — Comptes financiers (50-59)
+# ---------------------------------------------------------
+classe_5:
+  "50": F            # Valeurs mobilières de placement
+  "51": F            # Banques, établissements financiers
+  "52": F            # Instruments de trésorerie
+  "53": F            # Caisse
+  "54": F            # Régies d'avances et accréditifs
+  "55": F            # (Réservé)
+  "56": F            # (Réservé)
+  "57": F            # (Réservé)
+  "58": F            # Virements internes
+  "59": F            # Dépréciations des comptes financiers
+
+# ---------------------------------------------------------
+# CLASSE 6 — Comptes de charges (60-69)
+# ---------------------------------------------------------
+classe_6:
+  "60": A            # Achats (défaut)
+  "61": A            # Services extérieurs
+  "62": A            # Autres services extérieurs
+  "63": E            # Impôts, taxes et versements assimilés
+  "64": P            # Charges de personnel
+  "65": T            # Autres charges de gestion courante (défaut)
+  "66": F            # Charges financières
+  "67": X            # Charges exceptionnelles
+  "68": A            # Dotations aux amort., dépréc., provisions (défaut)
+  "69": E            # Participation salariés, IS
+
+  # Surcharges 3 chiffres
+  "601": A           # Achats stockés - Matières premières
+  "602": A           # Achats stockés - Autres appro
+  "603": S           # Variation des stocks (appro et marchandises)
+  "604": A           # Achats d'études et prestations
+  "605": A           # Achats de matériels et fournitures
+  "606": A           # Achats non stockés de matières
+  "607": A           # Achats de marchandises
+  "608": A           # Frais accessoires d'achat
+  "609": A           # Rabais, remises, ristournes sur achats
+  "611": A           # Sous-traitance générale
+  "612": A           # Redevances de crédit-bail
+  "613": A           # Locations
+  "614": A           # Charges locatives et de copropriété
+  "615": A           # Entretien et réparations
+  "616": A           # Primes d'assurance
+  "617": A           # Études et recherches
+  "618": A           # Divers services extérieurs
+  "619": A           # Rabais, remises, ristournes sur services ext.
+  "621": A           # Personnel extérieur / intérimaires
+  "622": A           # Rémunérations d'intermédiaires
+  "623": A           # Publicité, publications, relations publiques
+  "624": A           # Transports de biens et collectivité
+  "625": A           # Déplacements, missions et réceptions
+  "626": A           # Frais postaux et télécommunications
+  "627": A           # Services bancaires
+  "628": A           # Divers autres services extérieurs
+  "629": A           # Rabais, remises, ristournes sur autres services ext.
+  "631": E           # Impôts, taxes et versements - rémunérations
+  "633": E           # Impôts, taxes et versements - autres organismes
+  "635": E           # Autres impôts, taxes et versements assimilés
+  "637": E           # Autres impôts, taxes (par nature)
+  "641": P           # Rémunérations du personnel
+  "642": P           # (Réservé personnel)
+  "643": P           # (Réservé personnel)
+  "644": P           # Rémunérations du dirigeant (travailleur non salarié)
+  "645": P           # Charges de sécurité sociale et prévoyance
+  "646": P           # Cotisations sociales personnelles de l'exploitant
+  "647": P           # Autres charges sociales
+  "648": P           # Autres charges de personnel
+  "649": P           # (Réservé personnel)
+  "651": A           # Redevances pour concessions, brevets, licences
+  "652": T           # (Réservé)
+  "653": T           # Jetons de présence
+  "654": V           # Pertes sur créances irrécouvrables
+  "655": T           # Quote-part de résultat sur opérations en commun
+  "656": T           # (Réservé)
+  "657": T           # (Réservé)
+  "658": T           # Charges diverses de gestion courante
+  "659": T           # (Réservé)
+  "661": F           # Charges d'intérêts
+  "664": F           # Pertes sur créances liées à des participations
+  "665": F           # Escomptes accordés
+  "666": F           # Pertes de change
+  "667": F           # Charges nettes sur cessions de VMP
+  "668": F           # Autres charges financières
+  "669": F           # (Réservé financier)
+  "671": X           # Charges exceptionnelles sur opérations de gestion
+  "672": X           # Charges sur exercices antérieurs
+  "674": X           # (Réservé exceptionnel)
+  "675": X           # Valeur comptable des éléments d'actif cédés
+  "678": X           # Autres charges exceptionnelles
+  "681": A           # Dotations aux amortissements - exploitation
+  "686": F           # Dotations aux amortissements - financier
+  "687": A           # Dotations aux provisions - exceptionnel
+  "691": E           # Participation des salariés
+  "695": E           # Impôts sur les bénéfices
+  "696": E           # Suppléments d'IS (distributions)
+  "697": E           # Imposition forfaitaire annuelle
+  "698": E           # Intégration fiscale
+  "699": E           # Produits - Reports en arrière des déficits
+
+# ---------------------------------------------------------
+# CLASSE 7 — Comptes de produits (70-79)
+# ---------------------------------------------------------
+classe_7:
+  "70": V            # Ventes de produits, prestations, marchandises
+  "71": S            # Production stockée (ou déstockage)
+  "72": I Corp       # Production immobilisée
+  "73": T            # (Réservé — produits nets partiels)
+  "74": C Propres    # Subventions d'exploitation
+  "75": T            # Autres produits de gestion courante (défaut)
+  "76": F            # Produits financiers
+  "77": X            # Produits exceptionnels
+  "78": A            # Reprises sur provisions (défaut)
+  "79": E            # Transferts de charges
+
+  # Surcharges 3 chiffres
+  "701": V           # Ventes de produits finis
+  "702": V           # Ventes de produits intermédiaires
+  "703": V           # Ventes de produits résiduels
+  "704": V           # Travaux (entreprises BTP)
+  "705": V           # Études
+  "706": V           # Prestations de services
+  "707": V           # Ventes de marchandises
+  "708": V           # Produits des activités annexes
+  "709": V           # Rabais, remises, ristournes sur ventes
+  "713": S           # Variation des stocks d'en-cours et produits
+  "714": S           # Variation des stocks de marchandises (rare)
+  "721": I Corp      # Production immobilisée - corporelles
+  "722": I Corp      # Production immobilisée - incorporelles
+  "731": T           # (Réservé)
+  "740": C Propres   # Subventions d'exploitation
+  "741": C Propres   # (Réservé subventions)
+  "751": T           # Redevances pour concessions, brevets
+  "752": T           # Revenus des immeubles non affectés
+  "753": T           # Jetons de présence
+  "754": T           # Ristournes perçues des coopératives
+  "755": T           # Quote-part de résultat sur opérations en commun
+  "756": T           # (Réservé)
+  "758": T           # Produits divers de gestion courante
+  "761": F           # Produits des participations
+  "762": F           # Produits des autres immos financières
+  "763": F           # Revenus des autres créances
+  "764": F           # Revenus des VMP
+  "765": F           # Escomptes obtenus
+  "766": F           # Gains de change
+  "767": F           # Produits nets sur cessions de VMP
+  "768": F           # Autres produits financiers
+  "769": F           # (Réservé financier)
+  "771": X           # Produits exceptionnels sur opérations de gestion
+  "772": X           # Produits sur exercices antérieurs
+  "774": X           # (Réservé exceptionnel)
+  "775": X           # Produits des cessions d'éléments d'actif
+  "778": X           # Autres produits exceptionnels
+  "781": A           # Reprises sur provisions - exploitation
+  "786": F           # Reprises sur provisions - financier
+  "787": A           # Reprises sur provisions - exceptionnel
+  "791": E           # Transferts de charges d'exploitation
+  "796": F           # Transferts de charges financières
+  "797": X           # Transferts de charges exceptionnelles
+
+# =============================================================================
+# CLASSIFICATION ACTIF / PASSIF / CHARGES / PRODUITS
+# =============================================================================
+classification_bilan:
+  # Comptes de classe 4 normalement au PASSIF
+  passif:
+    - "400"
+    - "401"
+    - "402"
+    - "403"
+    - "404"
+    - "405"
+    - "406"
+    - "407"
+    - "408"
+    - "419"
+    - "421"
+    - "422"
+    - "424"
+    - "426"
+    - "427"
+    - "428"
+    - "429"
+    - "431"
+    - "432"
+    - "433"
+    - "434"
+    - "435"
+    - "436"
+    - "437"
+    - "438"
+    - "439"
+    - "441"
+    - "442"
+    - "443"
+    - "444"
+    - "445"
+    - "446"
+    - "447"
+    - "448"
+    - "449"
+    - "451"
+    - "455"
+    - "456"
+    - "457"
+    - "458"
+    - "459"
+    - "462"
+    - "464"
+    - "467"
+    - "472"
+    - "475"
+    - "477"
+    - "487"
+  # Tout le reste de la classe 4 est ACTIF par défaut
+
+# =============================================================================
+# CONFIGURATION GÉNÉRALE
+# =============================================================================
+ordre_cycles:
+  - C Propres
+  - C PRC
+  - F
+  - I Incorp
+  - I Corp
+  - I Fi
+  - S
+  - A
+  - V
+  - P
+  - E
+  - T
+  - X
+
+noms_cycles:
+  A: Fournisseurs-Achats
+  V: Clients-Ventes
+  P: Personnel
+  E: État
+  F: Financement
+  S: Stocks
+  T: Autres créances - dettes
+  I Corp: Immobilisations corporelles
+  I Incorp: Immobilisations incorporelles
+  I Fi: Immobilisations financières
+  C Propres: Capitaux propres
+  C PRC: Provisions pour risques et charges
+  X: Résultat exceptionnel
+
+seuils:
+  variation_significative: 0.25
+  montant_rond_min: 10000
+  benford_mad_seuil: 0.015
+
+templates:
+  A_Fournisseurs: A
+  V_Clients: V
+  P_Personnel: P
+  E_Etat: E
+  F_Financement: F
+  S_Stocks: S
+  T_Autres: T
+  I_Immobilisations_corp: I Corp
+  I_Immobilisations_incorporelles: I Incorp
+  I_Immobilisations_financie: I Fi
+  C_Capitaux: C Propres
+  C_Provision: C PRC
+  X_Re_sultat: X
+
+# =============================================================================
+# SURCHARGES CABINET — Personnalisez ici
+# =============================================================================
+# Format : "prefixe": cycle
+# Priorité maximale (après le FM existant du client)
+# Exemples :
+#   "205": I Incorp     # Brevets classés en incorporel
+#   "468100": P          # Sous-compte spécifique en Personnel
+surcharges_cabinet: {}

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 install:*)",
+      "Bash(python3 -m pytest tests/test_fec_parser.py -v)",
+      "Bash(python3:*)",
+      "Bash(pkill -f \"streamlit run app.py\")",
+      "Bash(pkill -f \"streamlit run\")",
+      "Bash(cp ~/Downloads/Modèle_concession_S_Stocks.xlsx /Users/augustinpedrini/Desktop/audit-automation/data/templates_concess/)",
+      "Bash(cp ~/Downloads/Modèle_concession_A_Fournisseurs-Achats.xlsx /Users/augustinpedrini/Desktop/audit-automation/data/templates_concess/)",
+      "Bash(cp ~/Downloads/logo_avizeo.png /Users/augustinpedrini/Desktop/audit-automation/data/assets/)",
+      "Bash(cp ~/Downloads/\"Modèle concession S_Stocks.xlsx\" /Users/augustinpedrini/Desktop/audit-automation/data/templates_concess/)",
+      "Bash(cp ~/Downloads/\"Modèle concession_A_Fournisseurs-Achats.xlsx\" /Users/augustinpedrini/Desktop/audit-automation/data/templates_concess/)",
+      "Bash(git *)",
+      "Bash(grep -E \"\\\\.md$\")"
+    ]
+  }
+}

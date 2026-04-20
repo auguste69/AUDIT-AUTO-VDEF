@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+output/audit_tmp/
+output/post_fix/
+output/pre_fix/
