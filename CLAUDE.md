@@ -341,6 +341,19 @@ python3 -m streamlit run app.py
 
 ---
 
+## RÈGLES AGENTS AUTO-EXÉCUTÉS (prompt_runner)
+
+Ces règles s'appliquent quand le projet est exécuté par `scripts/prompt_runner.py`
+(agents Claude Code non-interactifs, `--dangerously-skip-permissions`).
+
+1. **Complétude** : implémenter entièrement l'objectif du prompt. Aucun TODO, aucun placeholder, aucune implémentation partielle.
+2. **Tests** : avant de terminer, s'assurer que `python3 -m pytest tests/ -q` ne régresse pas par rapport au baseline.
+3. **Scope strict** : ne modifier que le code directement nécessaire à l'objectif. Aucun refactoring non demandé.
+4. **Zéro hardcode client** : aucune valeur GILAC en dur (voir "Règles de codage").
+5. **Vérification** : relire le prompt après implémentation pour confirmer chaque point des `<validation>`.
+
+---
+
 ## Ordre de construction recommandé
 
 1. `src/config/mapping_pcg.yaml` + `src/parsers/mapping_parser.py`
