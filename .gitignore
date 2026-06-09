@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 .DS_Store
 output/
+.pytest_cache/
+scripts/.run_state.json
+scripts/run_log.md

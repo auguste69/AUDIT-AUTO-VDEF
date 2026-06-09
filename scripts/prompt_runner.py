@@ -4,7 +4,10 @@ Orchestrateur de prompts XML séquentiels pour audit-automation.
 
 Exécute les prompts 3 à 12 de scripts/prompts.md les uns après les autres
 via des agents Claude Code isolés. Après chaque prompt : pytest, auto-fix
-en cas de régression, vérification indépendante que l'objectif est atteint.
+en cas de régression, contrôle de scope (git status vs fichiers autorisés),
+exécution déterministe des <validation_cmds>, vérification LLM indépendante,
+puis commit git checkpoint. En cas d'échec irrésoluble : rollback git au
+dernier commit vert (désactivable avec --no-rollback).
 
 Usage :
     python3 scripts/prompt_runner.py --prompts-file scripts/prompts.md
@@ -33,11 +36,15 @@ CLAUDE_BIN = "/opt/node22/bin/claude"
 AGENT_RULES = """RÈGLES STRICTES POUR CET AGENT — NE PAS DÉVIER :
 1. Implémenter ENTIÈREMENT l'objectif. Zéro TODO, zéro placeholder, zéro mock.
 2. Avant de terminer, vérifier que `python3 -m pytest tests/ -q` ne régresse pas.
-3. Scope : uniquement les changements demandés. Ne pas refactorer du code non lié.
+3. Scope STRICT : ne modifier/créer QUE les fichiers listés dans fichiers_a_modifier
+   et fichiers_a_creer (contrôle automatisé par `git status` après ton passage —
+   tout fichier hors liste fera échouer la tentative).
 4. Respecter les conventions CLAUDE.md du projet (type hints, docstrings français, pas de print()).
 5. Tout numéro de compte, libellé ou montant client doit venir de données, jamais hardcodé.
 6. Lire les fichiers existants (RP-2) avant de les modifier.
-7. Si une ambiguïté existe, choisir l'interprétation la plus complète compatible avec les contraintes."""
+7. Si une ambiguïté existe, choisir l'interprétation la plus complète compatible avec les contraintes.
+8. Les commandes du bloc <validation_cmds> seront exécutées mécaniquement après ton passage
+   (exit code 0 obligatoire) — exécute-les toi-même avant de terminer."""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,23 +57,36 @@ logger = logging.getLogger(__name__)
 # Parsing des prompts
 # ---------------------------------------------------------------------------
 PROMPT_BLOCK_RE = re.compile(
-    r"<prompt[^>]*>(.*?)</prompt>",
+    r"<prompt\b([^>]*)>(.*?)</prompt>",
     re.DOTALL,
 )
 TAG_RE = re.compile(r"<(\w+)>(.*?)</\1>", re.DOTALL)
+FICHIER_RE = re.compile(
+    r"((?:src|tests|scripts|data)/[\w./ \-]+?\.\w+|main\.py|app\.py|CLAUDE\.md|README\.md)"
+)
 
 
 def parse_prompts(path: Path) -> list[dict]:
     """Extrait les blocs <prompt>...</prompt> du fichier markdown."""
     text = path.read_text(encoding="utf-8")
     prompts = []
-    for block in PROMPT_BLOCK_RE.findall(text):
+    for attrs, block in PROMPT_BLOCK_RE.findall(text):
         p: dict = {}
         for tag, content in TAG_RE.findall(block):
             p[tag] = content.strip()
         if "objectif" in p:
+            m = re.search(r'id="(\d+)"', attrs)
+            p["pid"] = m.group(1) if m else "?"
+            m = re.search(r'titre="([^"]*)"', attrs)
+            p["titre"] = m.group(1) if m else p["objectif"].splitlines()[0][:60]
             prompts.append(p)
     return prompts
+
+
+def fichiers_autorises(prompt: dict) -> set[str]:
+    """Extrait l'ensemble des chemins autorisés (à modifier ou créer) d'un prompt."""
+    source = prompt.get("fichiers_a_modifier", "") + "\n" + prompt.get("fichiers_a_creer", "")
+    return {f.strip() for f in FICHIER_RE.findall(source)}
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +130,7 @@ def run_tests(cwd: Path = ROOT) -> dict:
         capture_output=True,
         text=True,
         cwd=str(cwd),
-        timeout=300,
+        timeout=600,
     )
     output = r.stdout + r.stderr
     passed = failed = errors = 0
@@ -130,6 +150,101 @@ def detect_baseline(cwd: Path = ROOT) -> int:
     """Détecte le baseline pytest actuel."""
     result = run_tests(cwd)
     return result["passed"]
+
+
+# ---------------------------------------------------------------------------
+# Git : checkpoints, rollback, contrôle de scope
+# ---------------------------------------------------------------------------
+def _git(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True, cwd=str(cwd), timeout=120,
+    )
+
+
+def git_head() -> str:
+    """SHA du commit courant."""
+    return _git("rev-parse", "HEAD").stdout.strip()
+
+
+def git_is_clean() -> bool:
+    """True si le working tree est propre (hors fichiers ignorés)."""
+    return _git("status", "--porcelain").stdout.strip() == ""
+
+
+def git_fichiers_modifies() -> list[str]:
+    """Liste des fichiers modifiés/créés/supprimés (non ignorés) depuis HEAD."""
+    fichiers = []
+    for line in _git("status", "--porcelain").stdout.splitlines():
+        path = line[3:].strip().strip('"')
+        if " -> " in path:  # renommage : on garde la destination
+            path = path.split(" -> ", 1)[1].strip('"')
+        fichiers.append(path)
+    return fichiers
+
+
+def git_commit_checkpoint(message: str) -> bool:
+    """Committe tout le working tree comme checkpoint. True si succès."""
+    _git("add", "-A")
+    r = _git("commit", "-m", message)
+    if r.returncode != 0:
+        logger.warning("Commit checkpoint échoué : %s", (r.stdout + r.stderr)[:300])
+        return False
+    return True
+
+
+def git_rollback(sha: str) -> None:
+    """Retour au dernier commit vert : reset --hard + suppression des fichiers non suivis."""
+    _git("reset", "--hard", sha)
+    _git("clean", "-fd")
+    logger.info("Rollback effectué sur %s", sha[:12])
+
+
+def check_scope(prompt: dict) -> list[str]:
+    """Compare git status aux fichiers autorisés du prompt. Retourne les violations."""
+    autorises = fichiers_autorises(prompt)
+    violations = []
+    for f in git_fichiers_modifies():
+        if f in autorises:
+            continue
+        # Seule tolérance : fixtures pytest (régénérées explicitement, ex. prompt 8)
+        if f.startswith("tests/fixtures/"):
+            logger.warning("Scope (toléré, fixture) : %s", f)
+            continue
+        violations.append(f)
+    return violations
+
+
+# ---------------------------------------------------------------------------
+# Validation déterministe (<validation_cmds>)
+# ---------------------------------------------------------------------------
+def run_validation_cmds(prompt: dict) -> tuple[bool, str]:
+    """Exécute chaque ligne du bloc <validation_cmds> dans bash.
+
+    Exit code 0 obligatoire pour chaque commande (les grep d'absence sont
+    préfixés par `!` dans prompts.md). Retourne (ok, feedback).
+    """
+    bloc = prompt.get("validation_cmds", "").strip()
+    if not bloc:
+        return True, "aucune commande de validation déterministe"
+    echecs = []
+    for ligne in bloc.splitlines():
+        cmd = ligne.strip()
+        if not cmd or cmd.startswith("#"):
+            continue
+        try:
+            r = subprocess.run(
+                ["/bin/bash", "-c", cmd],
+                capture_output=True, text=True, cwd=str(ROOT), timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            echecs.append(f"TIMEOUT (600s) : {cmd}")
+            continue
+        if r.returncode != 0:
+            sortie = (r.stdout + r.stderr).strip()[-500:]
+            echecs.append(f"rc={r.returncode} : {cmd}\n{sortie}")
+    if echecs:
+        return False, "Commandes de validation en échec :\n" + "\n---\n".join(echecs)
+    return True, f"{len([l for l in bloc.splitlines() if l.strip()])} commande(s) OK"
 
 
 # ---------------------------------------------------------------------------
@@ -171,34 +286,6 @@ Arborescence actuelle :
     except (json.JSONDecodeError, KeyError):
         pass
     return []
-
-
-def resolve_conflicts(prompt: dict, conflicts: list[str]) -> dict:
-    """Agent Resolver : adapte minimalement le prompt si des prérequis manquent."""
-    conflicts_str = "\n".join(f"- {c}" for c in conflicts)
-    resolver_prompt = f"""Les éléments suivants sont référencés dans le prompt mais n'existent pas encore :
-{conflicts_str}
-
-Adapte MINIMALEMENT le prompt pour qu'il puisse s'exécuter correctement.
-Si des fichiers manquants doivent être créés en prérequis, indique-le dans les instructions.
-Retourne le prompt modifié complet, en conservant exactement les mêmes balises XML.
-
-Prompt original :
-<objectif>{prompt.get('objectif', '')}</objectif>
-<instructions>{prompt.get('instructions', '')}</instructions>
-<contraintes>{prompt.get('contraintes', '')}</contraintes>
-<validation>{prompt.get('validation', '')}</validation>"""
-
-    rc, output = run_claude(resolver_prompt, model="sonnet", timeout=180, add_rules=False)
-    if rc != 0:
-        logger.warning("Resolver échoué — utilisation du prompt original")
-        return prompt
-
-    resolved = dict(prompt)
-    for tag, content in TAG_RE.findall(output):
-        if tag in resolved:
-            resolved[tag] = content.strip()
-    return resolved
 
 
 def run_impl_agent(prompt: dict, idx: int, attempt: int, prev_feedback: str = "") -> str:
@@ -332,21 +419,34 @@ MAX_IMPL_ATTEMPTS = 3
 MAX_FIX_ATTEMPTS = 3
 
 
-def run_prompt(prompt: dict, idx: int, state: dict) -> bool:
-    """Exécute un prompt complet. Retourne True si succès."""
+def run_prompt(
+    prompt: dict,
+    idx: int,
+    state: dict,
+    total: int,
+    rollback: bool = True,
+    lax_scope: bool = False,
+) -> bool:
+    """Exécute un prompt complet. Retourne True si succès (et committé)."""
     baseline = state["baseline"]
+    pid = prompt.get("pid", str(idx + 1))
     ts_start = datetime.now().strftime("%Y-%m-%d %H:%M")
+    head_avant = git_head()
 
-    write_log(f"\n## {ts_start} — Prompt {idx + 1}/10 : {prompt.get('objectif', '')[:80]}")
+    write_log(
+        f"\n## {ts_start} — Prompt {pid} ({idx + 1}/{total}) : "
+        f"{prompt.get('titre', prompt.get('objectif', ''))[:80]}"
+        f"\n**Checkpoint git** : {head_avant[:12]}"
+    )
 
     # 1. Conflict check
     conflicts = check_conflicts(prompt, idx)
     if conflicts:
         write_log(f"**Conflits détectés** : {', '.join(conflicts)}")
-        prompt = resolve_conflicts(prompt, conflicts)
-        write_log("**Prompt adapté par le Resolver**")
-    else:
-        write_log("**Conflits** : aucun")
+        write_log("**RUN INTERROMPU** : prérequis manquants — corriger prompts.md "
+                  "ou l'état du dépôt manuellement (pas d'adaptation silencieuse).")
+        return False
+    write_log("**Conflits** : aucun")
 
     # 2. Boucle implémentation
     prev_feedback = ""
@@ -385,17 +485,53 @@ def run_prompt(prompt: dict, idx: int, state: dict) -> bool:
 
             if not fixed:
                 write_log(f"**ÉCHEC IRRÉSOLUBLE** : régression non corrigée après {MAX_FIX_ATTEMPTS} tentatives")
+                if rollback:
+                    git_rollback(head_avant)
+                    write_log(f"**Rollback** : retour à {head_avant[:12]}")
                 return False
 
-        # 2d. Vérification de l'objectif
+        # 2d. Contrôle de scope (git status vs fichiers autorisés)
+        violations = check_scope(prompt)
+        if violations:
+            msg = "Fichiers modifiés HORS SCOPE du prompt : " + ", ".join(violations)
+            if lax_scope:
+                write_log(f"**Scope** : ⚠️ {msg} (mode lax — toléré)")
+            else:
+                write_log(f"**Scope** : ❌ {msg}")
+                prev_feedback = (
+                    f"{msg}\nRestaure ces fichiers à leur état d'origine (git checkout -- <fichier> "
+                    "pour les fichiers suivis, suppression pour les nouveaux) ou justifie-les "
+                    "en les déplaçant dans un fichier autorisé."
+                )
+                continue
+        else:
+            write_log("**Scope** : ✅ conforme")
+
+        # 2e. Commandes de validation déterministes
+        vc_ok, vc_feedback = run_validation_cmds(prompt)
+        if not vc_ok:
+            write_log(f"**Validation déterministe** : ❌\n```\n{vc_feedback[:1000]}\n```")
+            prev_feedback = vc_feedback
+            continue
+        write_log(f"**Validation déterministe** : ✅ {vc_feedback}")
+
+        # 2f. Vérification de l'objectif (LLM, en complément)
         obj_ok, feedback = verify_objective(prompt, idx)
         if obj_ok:
             write_log(f"**Vérificateur** : ✅ {feedback}")
+            # Checkpoint git : commit de l'état validé
+            commit_msg = f"Prompt {pid}: {prompt.get('titre', '')[:70]}"
+            if git_commit_checkpoint(commit_msg):
+                write_log(f"**Commit** : `{commit_msg}` ({git_head()[:12]})")
+            else:
+                write_log("**Commit** : ⚠️ échec du commit checkpoint (à committer manuellement)")
             state["results"].append({
                 "idx": idx,
+                "pid": pid,
                 "status": "success",
                 "attempts": attempt + 1,
                 "tests_passed": test_result["passed"],
+                "commit": git_head(),
                 "ts": ts_start,
             })
             # Mettre à jour le baseline si on a plus de tests
@@ -409,8 +545,12 @@ def run_prompt(prompt: dict, idx: int, state: dict) -> bool:
             prev_feedback = feedback
 
     write_log(f"**ÉCHEC** : objectif non atteint après {MAX_IMPL_ATTEMPTS} tentatives\n---")
+    if rollback:
+        git_rollback(head_avant)
+        write_log(f"**Rollback** : retour à {head_avant[:12]}")
     state["results"].append({
         "idx": idx,
+        "pid": pid,
         "status": "failed",
         "attempts": MAX_IMPL_ATTEMPTS,
         "ts": ts_start,
@@ -433,6 +573,12 @@ def parse_args() -> argparse.Namespace:
                    help="Forcer le démarrage depuis le prompt i (0-indexé)")
     p.add_argument("--dry-run", action="store_true",
                    help="Affiche les prompts parsés sans exécuter")
+    p.add_argument("--no-rollback", action="store_true",
+                   help="Ne pas faire de git reset --hard en cas d'échec (inspection manuelle)")
+    p.add_argument("--lax-scope", action="store_true",
+                   help="Les violations de scope deviennent des warnings au lieu d'échecs")
+    p.add_argument("--allow-dirty", action="store_true",
+                   help="Autoriser un working tree non propre au démarrage (déconseillé)")
     return p.parse_args()
 
 
@@ -455,12 +601,22 @@ def main() -> None:
     if args.dry_run:
         for i, p in enumerate(prompts):
             print(f"\n{'='*60}")
-            print(f"Prompt {i+1}/{len(prompts)}")
+            print(f"Prompt id={p.get('pid', '?')} ({i+1}/{len(prompts)}) — {p.get('titre', '')}")
             print(f"Objectif : {p.get('objectif', '')[:200]}")
-            fichiers = p.get('fichiers_a_modifier', '') + p.get('fichiers_a_creer', '')
-            print(f"Fichiers : {fichiers[:200]}")
+            print(f"Fichiers autorisés : {sorted(fichiers_autorises(p))}")
+            n_cmds = len([l for l in p.get('validation_cmds', '').splitlines() if l.strip()])
+            print(f"Commandes de validation déterministes : {n_cmds}")
         print(f"\n{len(prompts)} prompt(s) prêts à l'exécution.")
         return
+
+    # Garde-fou : working tree propre (chaque prompt validé sera committé,
+    # un tree sale polluerait le premier checkpoint)
+    if not git_is_clean() and not args.allow_dirty:
+        logger.error(
+            "Working tree non propre (git status). Committez ou stashez vos "
+            "changements avant de lancer le runner, ou utilisez --allow-dirty."
+        )
+        sys.exit(1)
 
     # Vérifier que pytest est disponible
     r = subprocess.run(
@@ -505,12 +661,17 @@ def main() -> None:
         logger.info("PROMPT %d/%d", i + 1, len(prompts))
         logger.info("=" * 60)
 
-        success = run_prompt(prompts[i], i, state)
+        success = run_prompt(
+            prompts[i], i, state,
+            total=len(prompts),
+            rollback=not args.no_rollback,
+            lax_scope=args.lax_scope,
+        )
         if not success:
             logger.error(
-                "Prompt %d échoué de façon irrésoluble. "
+                "Prompt id=%s échoué de façon irrésoluble. "
                 "Relancez avec --resume après correction manuelle.",
-                i + 1,
+                prompts[i].get("pid", i + 1),
             )
             state["current_prompt"] = i
             save_state(state)

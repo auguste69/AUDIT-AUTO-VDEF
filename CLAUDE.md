@@ -409,10 +409,11 @@ Ces règles s'appliquent quand le projet est exécuté par `scripts/prompt_runne
 |---|---|---|
 | AACE, A0 | `_A_Fournisseurs-Achats.xlsx` | "A Synthèse" |
 | C Propres0 | `_C_Capitaux propres.xlsx` | "C Synthèse" |
-| C PRC0 | `_C_Provisions pour risques et charges.xlsx` | "C Synthèse" |
+| C PRC0 | `_C_Provision pour risques et charges.xlsx` | "C Synthèse" |
 | E0 | `_E_Etat.xlsx` | "E Synthèse" |
 | Tréso, F0 | `_F_Financement.xlsx` | "F Synthèse" |
 | I Corp0, I Incorp0 | `_I_Immobilisations corp.xlsx` | "I Synthèse" |
+| *(aucune)* | `_I_Immobilisations incorporelles.xlsx` | "I Synthèse" |
 | I Fi0 | `_I_Immobilisations financières.xlsx` | "I Synthèse" |
 | P0 | `_P_Personnel.xlsx` | "P Synthèse" |
 | S0 | `_S_Stocks.xlsx` | "S Synthèse" |
@@ -420,9 +421,11 @@ Ces règles s'appliquent quand le projet est exécuté par `scripts/prompt_runne
 | V0 | `_V_Clients-Ventes.xlsx` | "V Synthèse" |
 | X0 | `_X_Résultat exceptionnel.xlsx` | "X Synthèse" |
 
-**Note importante :** Le template `_I_Immobilisations corp.xlsx` reçoit les deux feuilles (I Corp0 ET I Incorp0) — les immos corp et incorp sont dans le même fichier template (confirmé).
+**Note importante :** Le template `_I_Immobilisations corp.xlsx` reçoit les deux feuilles (I Corp0 ET I Incorp0) — les immos corp et incorp sont dans le même fichier template (confirmé). Le template `_I_Immobilisations incorporelles.xlsx` existe dans `data/templates/` (13 fichiers au total) mais ne reçoit AUCUNE feuille FM : il est copié/renommé avec remplacement des placeholders uniquement. Les clés du mapping `integration_templates` doivent correspondre aux noms de fichiers RÉELS de `data/templates/` (ex. "Provision" au singulier).
 
 **Complexité technique :** openpyxl ne supporte pas nativement la copie d'onglets entre workbooks. Il faut recréer l'onglet cellule par cellule en copiant valeurs, styles, fusions et dimensions.
+
+**⚠️ Risque images/dessins (vérifié) :** 9 des 13 templates contiennent des images ou dessins (jusqu'à 12 éléments dans `E_Etat.xlsx`). openpyxl perd les *shapes*/dessins à la simple ouverture+sauvegarde d'un fichier, et la préservation des images/graphiques connaît des régressions selon les versions. Toute évolution de `template_writer.py` doit inclure un test automatique comptant les médias (`xl/media/*`, `xl/drawings/*` dans l'archive ZIP) avant/après génération, et toute perte doit être détectée et documentée.
 
 **Solution technique :**
 1. Modifier `template_writer.py` : supprimer `_injecter_balance_cycle()` (approche incorrecte)
@@ -668,7 +671,7 @@ Cohérence fondamentale : FRNG = BFR + TN
 | Écarts de réévaluation | 105 |
 | Réserve légale | 1061 |
 | Réserves statutaires | 1063 |
-| Réserves réglementées | 1062, 1064 |
+| Réserves réglementées | 1062, 1064 (choix cabinet : 1062 "réserves indisponibles" rattaché ici par convention — à documenter dans le YAML) |
 | Autres réserves | 1068 |
 | Report à nouveau | 11x |
 | Résultat de l'exercice | 12x |
@@ -694,8 +697,8 @@ Cohérence fondamentale : FRNG = BFR + TN
 | Ligne P&L | Racines de comptes |
 |---|---|
 | **Produits d'exploitation** | |
-| Ventes de marchandises | 707, 7087, 7097 |
-| Production vendue (Biens et Services) | Autres 70x (701-706, 708 sauf 7087, 709 sauf 7097) |
+| Ventes de marchandises | 707, 7097 (RRR accordés sur ventes de marchandises, en déduction) |
+| Production vendue (Biens et Services) | Autres 70x (701-706, 708 y compris 7087, 709 sauf 7097) |
 | **= Chiffre d'affaires** | Somme des deux ci-dessus |
 | Production stockée | 713 |
 | Production immobilisée | 72x |
@@ -712,8 +715,10 @@ Cohérence fondamentale : FRNG = BFR + TN
 | Impôts et taxes | 63x |
 | Salaires et traitements | 641, 644 |
 | Charges sociales | 645-649 |
-| Dotations amort./dép. immobilisations | 6811, 6812, 6816, 6817 |
-| Dotations provisions | 6815 |
+| Dotations amortissements (ligne GA) | 6811, 6812 |
+| Dotations dépréciations immobilisations (ligne GB) | 6816 |
+| Dotations dépréciations actif circulant (ligne GC) | 6817 |
+| Dotations provisions (ligne GD) | 6815 |
 | Autres charges | 65x (sauf 655) |
 | **Total charges exploitation** | |
 | **= Résultat d'exploitation** | Produits − Charges |
@@ -734,7 +739,7 @@ Format liasse fiscale 2052/2053 complet :
 - Résultat courant avant impôts
 - Résultat exceptionnel (77x − 67x)
 - Participation des salariés (691)
-- Impôts sur les bénéfices (695, 699)
+- Impôts sur les bénéfices (695, 698 intégration fiscale, 699 carry-back en déduction)
 - **= Résultat net comptable**
 
 ---
