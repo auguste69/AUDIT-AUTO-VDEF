@@ -99,8 +99,18 @@ def map_cycles(
     Retourne
     --------
     pd.DataFrame
-        Copie de la balance avec 4 colonnes supplémentaires :
-        cycle, compta, etatfi, ref.
+        Copie de la balance avec les colonnes supplémentaires :
+        cycle, etatfi_n, etatfi_n1, compta_n, compta_n1, ref,
+        plus les aliases historiques etatfi (= etatfi_n) et
+        compta (= compta_n) pour les consommateurs existants.
+
+    Notes
+    -----
+    Pour les comptes absents du mapping FM (nouveaux comptes résolus par
+    le fallback PCG), les valeurs N-1 (etatfi_n1, compta_n1) restent VIDES :
+    le compte n'existait pas dans l'exercice N-1, il n'a donc pas de
+    classification N-1 — c'est le choix le plus cohérent (pas d'invention
+    d'historique).
     """
     if mapping_fm is None:
         mapping_fm = {}
@@ -111,10 +121,12 @@ def map_cycles(
 
     df = balance.copy()
 
-    cycles:  list = []
-    comptas: list = []
-    etatfis: list = []
-    refs:    list = []
+    cycles:     list = []
+    comptas_n:  list = []
+    comptas_n1: list = []
+    etatfis_n:  list = []
+    etatfis_n1: list = []
+    refs:       list = []
 
     nb_fm  = 0
     nb_pcg = 0
@@ -126,9 +138,17 @@ def map_cycles(
         # --- Priorité 1 : FM existant ---
         if num in mapping_fm:
             info = mapping_fm[num]
+            # .get avec fallback sur les aliases : tolère les mappings
+            # construits avant l'introduction des clés _n/_n1
+            etatfi_n  = info.get("etatfi_n",  info.get("etatfi", ""))
+            etatfi_n1 = info.get("etatfi_n1", "")
+            compta_n  = info.get("compta_n",  info.get("compta", ""))
+            compta_n1 = info.get("compta_n1", "")
             cycles.append(info["cycle"])
-            comptas.append(info["compta"])
-            etatfis.append(info["etatfi"])
+            comptas_n.append(compta_n)
+            comptas_n1.append(compta_n1)
+            etatfis_n.append(etatfi_n)
+            etatfis_n1.append(etatfi_n1)
             refs.append(info["ref"])
             nb_fm += 1
             continue
@@ -140,23 +160,32 @@ def map_cycles(
             compta = _resoudre_compta(num, passif_pref)
             ref    = f"{cycle_pcg}0"
             cycles.append(cycle_pcg)
-            comptas.append(compta)
-            etatfis.append("")
+            comptas_n.append(compta)
+            comptas_n1.append("")   # nouveau compte : pas d'historique N-1
+            etatfis_n.append("")
+            etatfis_n1.append("")
             refs.append(ref)
             nb_pcg += 1
         else:
             # Ne devrait jamais arriver avec un YAML exhaustif
             logger.warning("Compte %s sans cycle trouvé — vérifie le mapping_pcg.yaml", num)
             cycles.append("")
-            comptas.append("")
-            etatfis.append("")
+            comptas_n.append("")
+            comptas_n1.append("")
+            etatfis_n.append("")
+            etatfis_n1.append("")
             refs.append("")
             nb_inconnu += 1
 
-    df["cycle"]  = cycles
-    df["compta"] = comptas
-    df["etatfi"] = etatfis
-    df["ref"]    = refs
+    df["cycle"]     = cycles
+    df["etatfi_n"]  = etatfis_n
+    df["etatfi_n1"] = etatfis_n1
+    df["compta_n"]  = comptas_n
+    df["compta_n1"] = comptas_n1
+    df["ref"]       = refs
+    # Aliases historiques (consommateurs existants : app.py, template_writer…)
+    df["etatfi"] = df["etatfi_n"]
+    df["compta"] = df["compta_n"]
 
     logger.info(
         "Mapping : %d comptes FM, %d comptes PCG, %d inconnus (total %d)",

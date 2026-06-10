@@ -142,10 +142,12 @@ def _ecrire_balance_tab(ws, df: pd.DataFrame, date_n: str, date_n1: str,
                FONT_NORMAL),
             (8, r["ref"],             None,   FONT_META),
             (10, r["cycle"],          None,   FONT_META),
-            (11, r.get("etatfi", ""), None,  FONT_META),
-            (12, r.get("etatfi", ""), None,  FONT_META),
-            (13, r["compta"],         None,   FONT_META),
-            (14, r["compta"],         None,   FONT_META),
+            # 4 colonnes distinctes : un reclassement inter-exercices
+            # (ex. client devenu créditeur) doit rester visible.
+            (11, r.get("etatfi_n",  r.get("etatfi", "")), None, FONT_META),
+            (12, r.get("etatfi_n1", ""),                  None, FONT_META),
+            (13, r.get("compta_n",  r.get("compta", "")), None, FONT_META),
+            (14, r.get("compta_n1", ""),                  None, FONT_META),
         ]
         write_data_row(ws, current_row, cells)
         current_row += 1
@@ -554,7 +556,9 @@ def write(
     Paramètres
     ----------
     balance_mappee : pd.DataFrame
-        Produit par cycle_mapper.map_cycles() — colonnes standard + cycle/compta/etatfi/ref.
+        Produit par cycle_mapper.map_cycles() — colonnes standard +
+        cycle/etatfi_n/etatfi_n1/compta_n/compta_n1/ref (et les aliases
+        etatfi/compta).
     client : str
         Nom du client (ex: "GILAC").
     date_cloture : str

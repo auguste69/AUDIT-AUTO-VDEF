@@ -74,7 +74,11 @@ class TestFromFm:
 
     def test_structure_entree(self, mapping_fm):
         info = mapping_fm["101300"]
-        assert set(info.keys()) == {"cycle", "etatfi", "compta", "ref"}
+        assert set(info.keys()) == {
+            "cycle", "ref",
+            "etatfi_n", "etatfi_n1", "compta_n", "compta_n1",
+            "etatfi", "compta",  # aliases historiques (= valeurs N)
+        }
 
     def test_valeurs_compte_connu(self, mapping_fm):
         info = mapping_fm["101300"]
@@ -205,7 +209,9 @@ class TestMapCycles:
 
     def test_shape(self, balance, balance_mappee):
         assert len(balance_mappee) == len(balance)
-        assert len(balance_mappee.columns) == len(balance.columns) + 4
+        # cycle, etatfi_n, etatfi_n1, compta_n, compta_n1, ref
+        # + aliases etatfi/compta = 8 colonnes ajoutées
+        assert len(balance_mappee.columns) == len(balance.columns) + 8
 
     def test_colonnes_ajoutees(self, balance_mappee):
         for col in ("cycle", "compta", "etatfi", "ref"):
