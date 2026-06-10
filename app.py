@@ -294,70 +294,10 @@ with tab_ctrl:
 with tab_balance:
     st.subheader("Balance générale N vs N-1")
 
-    # Reconstruire la balance depuis le FEC en mémoire pour affichage
-    from src.parsers.fec_parser import parse as _parse_fec
-    from src.parsers.mapping_parser import (
-        from_fm as _from_fm,
-        from_pcg_config as _from_pcg,
-        from_balance_excel as _from_balance_excel,
-        from_fec_n1 as _from_fec_n1,
-        detect_balance_sheet as _detect_balance_sheet,
-    )
-    from src.engine.balance_builder import build as _build
-    from src.engine.cycle_mapper import map_cycles as _map_cycles
-
-    @st.cache_data(show_spinner=False)
-    def _get_balance(fec_bytes, fec_nom, n1_bytes, n1_nom, pcg_path):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            fec_p = tmp / fec_nom
-            fec_p.write_bytes(fec_bytes)
-            df_fec = _parse_fec(fec_p)
-            pcg = _from_pcg(pcg_path)
-            mapping_fm = None
-            bal_n1 = None
-
-            if n1_bytes and n1_nom:
-                n1_p = tmp / n1_nom
-                n1_p.write_bytes(n1_bytes)
-                suffix = Path(n1_nom).suffix.lower()
-
-                if suffix == ".txt":
-                    # FEC N-1
-                    bal_n1 = _from_fec_n1(n1_p)
-                elif suffix == ".xlsx":
-                    import openpyxl
-                    nom_feuille, mode = _detect_balance_sheet(n1_p)
-                    if mode == "fm":
-                        mapping_fm = _from_fm(n1_p)
-                        wb2 = openpyxl.load_workbook(n1_p, read_only=True, data_only=True)
-                        ws = wb2[nom_feuille]
-                        bal_n1 = {}
-                        for row in ws.iter_rows(min_row=10, values_only=True):
-                            if row[1] is None:
-                                continue
-                            try:
-                                num = str(int(float(row[1])))
-                            except (ValueError, TypeError):
-                                continue
-                            bal_n1[num] = {
-                                "libelle": str(row[2] or ""),
-                                "solde_ke": float(row[3] or 0),
-                            }
-                        wb2.close()
-                    else:
-                        bal_n1 = _from_balance_excel(n1_p)
-
-            balance = _build(df_fec, bal_n1)
-            return _map_cycles(balance, mapping_fm, pcg)
-
-    bm = _get_balance(
-        fec_bytes=fec_upload.getvalue() if fec_upload else b"",
-        fec_nom=fec_upload.name if fec_upload else "",
-        n1_bytes=n1_upload.getvalue() if n1_upload else None,
-        n1_nom=n1_upload.name if n1_upload else None,
-        pcg_path=str(_PCG_DEFAULT),
-    )
+    # Balance mappée exposée directement par run_pipeline (pas de
+    # reconstruction : la logique N-1 est centralisée dans
+    # src/parsers/balance_n1_loader.py)
+    bm = resultats["balance_mappee"]
 
     # Filtres
     col_f1, col_f2 = st.columns([2, 1])

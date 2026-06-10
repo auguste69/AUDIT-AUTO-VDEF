@@ -88,10 +88,12 @@ def run_pipeline(
     Retourne
     --------
     dict avec les clés :
-        fec_lignes, nb_comptes, controles, fm_path, zip_path (optionnel)
+        fec_lignes, nb_comptes, controles, balance_mappee, fm_path,
+        zip_path (optionnel)
     """
     from src.parsers.fec_parser import parse
-    from src.parsers.mapping_parser import from_fm, from_pcg_config
+    from src.parsers.balance_n1_loader import load_balance_n1
+    from src.parsers.mapping_parser import from_pcg_config
     from src.engine.balance_builder import build
     from src.engine.controls import run_all, run_controles_financiers
     from src.engine.cycle_mapper import map_cycles
@@ -148,54 +150,7 @@ def run_pipeline(
     balance_n1 = None
 
     if n1_fm:
-        n1_path = Path(n1_fm)
-        suffix = n1_path.suffix.lower()
-
-        if suffix == ".txt":
-            # Source FEC N-1 : pas de mapping FM, uniquement balance agrégée
-            logger.info("Source N-1 : FEC — %s", n1_fm)
-            from src.parsers.mapping_parser import from_fec_n1
-            balance_n1 = from_fec_n1(n1_fm)
-            logger.info("Balance N-1 : %d comptes chargés depuis le FEC N-1", len(balance_n1))
-
-        elif suffix == ".xlsx":
-            from src.parsers.mapping_parser import detect_balance_sheet, from_balance_excel
-            import openpyxl
-            nom_feuille, mode = detect_balance_sheet(n1_path)
-
-            if mode == "fm":
-                logger.info("Source N-1 : FM existant — %s", n1_fm)
-                mapping_fm = from_fm(n1_fm)
-                # Extraire les soldes N-1 depuis la feuille détectée
-                wb2 = openpyxl.load_workbook(n1_fm, read_only=True, data_only=True)
-                ws = wb2[nom_feuille]
-                balance_n1 = {}
-                for row in ws.iter_rows(min_row=10, values_only=True):
-                    if row[1] is None:
-                        continue
-                    try:
-                        num = str(int(float(row[1])))
-                    except (ValueError, TypeError):
-                        continue
-                    solde = float(row[3]) if row[3] is not None else 0.0
-                    balance_n1[num] = {
-                        "libelle": str(row[2]) if row[2] else "",
-                        "solde_ke": solde,
-                    }
-                wb2.close()
-                logger.info("Balance N-1 : %d comptes chargés depuis le FM", len(balance_n1))
-
-            else:
-                # Balance Excel simple : pas de mapping FM
-                logger.info("Source N-1 : Balance Excel simple — %s", n1_fm)
-                balance_n1 = from_balance_excel(n1_fm)
-                logger.info("Balance N-1 : %d comptes chargés depuis la balance Excel", len(balance_n1))
-
-        else:
-            raise ValueError(
-                f"Format N-1 non reconnu pour '{n1_fm}'. "
-                "Formats acceptés : .txt (FEC), .xlsx (FM ou balance simple)."
-            )
+        balance_n1, mapping_fm = load_balance_n1(n1_fm)
 
     balance = build(df_fec, balance_n1)
     resultats["nb_comptes"] = len(balance)
@@ -212,6 +167,7 @@ def run_pipeline(
     # ------------------------------------------------------------------
     logger.info("=== ÉTAPE 4/5 — Mapping des cycles ===")
     balance_mappee = map_cycles(balance, mapping_fm, pcg)
+    resultats["balance_mappee"] = balance_mappee
     nb_inconnus = (balance_mappee["cycle"] == "").sum()
     if nb_inconnus:
         logger.warning("%d compte(s) sans cycle — vérifier mapping_pcg.yaml", nb_inconnus)
