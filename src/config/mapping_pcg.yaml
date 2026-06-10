@@ -539,30 +539,65 @@ liasse_fiscale:
   aace:
     prefixes: ["606", "607", "608", "609", "61", "62"]
 
+  # ---------------------------------------------------------------------------
+  # EBIT (résultat d'exploitation, cerfa 2052)
+  #
+  # Représentation des exclusions ("709 sauf 7097", "75 sauf 755",
+  # "65 sauf 655") : clés "*_exclusions" explicites. Un poste = somme des
+  # comptes matchant ses préfixes MOINS la somme des comptes matchant les
+  # préfixes de la clé "<poste>_exclusions" (sous-préfixes plus spécifiques).
+  # Choix retenu car plus lisible et plus robuste que l'énumération
+  # exhaustive des sous-préfixes inclus (ex. 7090…7096, 7098, 7099).
+  #
+  # Convention de signe (appliquée dans financial_engine.calculer_ebit) :
+  # produits (classe 7, créditeurs) × -1 → positif ; charges (classe 6,
+  # débitrices) telles quelles → positif ; EBIT = produits − charges.
+  #
+  # Les comptes de classe 6/7 hors exploitation (66x, 67x, 69x, 76x, 77x,
+  # 78x sauf 781, 79x sauf 791, 655, 755) n'apparaissent PAS dans l'EBIT —
+  # résultat financier/exceptionnel traité par le P&L détaillé (prompt 10).
+  #
+  # NOTE frais accessoires d'achats : 6081/6082/6091/6092 suivent les
+  # matières premières et 6087/6097 les marchandises. Les autres
+  # subdivisions 608x/609x (ex. 6085 droits de douane, 6088 frais divers)
+  # ne sont PAS rattachées aux autres charges externes : convention de la
+  # cible de référence GILAC validée par le cabinet (les rattacher
+  # ajouterait ces frais aux charges d'exploitation).
+  # ---------------------------------------------------------------------------
   ebit:
     produits_exploitation:
-      ventes_marchandises: []
-      production_vendue: []
-      production_stockee: []
-      production_immobilisee: []
-      subventions_exploitation: []
-      reprises_transferts: []
-      autres_produits: []
+      # 7097 (RRR accordés sur ventes de marchandises, débiteur) inclus ici :
+      # son solde débiteur se déduit automatiquement des ventes par le signe.
+      ventes_marchandises: ["707", "7097"]
+      production_vendue: ["701", "702", "703", "704", "705", "706",
+                          "708", "709"]
+      # 7097 déjà déduit des ventes de marchandises
+      production_vendue_exclusions: ["7097"]
+      production_stockee: ["713"]
+      production_immobilisee: ["72"]
+      subventions_exploitation: ["74"]
+      reprises_transferts: ["781", "791"]
+      autres_produits: ["75"]
+      # 755 (quotes-parts de résultat) → hors exploitation
+      autres_produits_exclusions: ["755"]
     charges_exploitation:
-      achats_marchandises: []
-      variation_stocks_marchandises: []
-      achats_matieres_premieres: []
-      variation_stocks_matieres: []
-      autres_charges_externes: []
-      impots_taxes: []
-      salaires_traitements: []
-      charges_sociales: []
+      achats_marchandises: ["607", "6087", "6097"]
+      variation_stocks_marchandises: ["6037"]
+      achats_matieres_premieres: ["601", "602", "6081", "6082",
+                                  "6091", "6092"]
+      variation_stocks_matieres: ["6031", "6032"]
+      autres_charges_externes: ["604", "605", "606", "61", "62"]
+      impots_taxes: ["63"]
+      salaires_traitements: ["641", "644"]
+      charges_sociales: ["645", "646", "647", "648", "649"]
       # Dotations en 4 lignes distinctes (cerfa 2052 : GA / GB / GC / GD)
-      dotations_amortissements: []
-      dotations_dep_immobilisations: []
-      dotations_dep_actif_circulant: []
-      dotations_provisions: []
-      autres_charges: []
+      dotations_amortissements: ["6811", "6812"]
+      dotations_dep_immobilisations: ["6816"]
+      dotations_dep_actif_circulant: ["6817"]
+      dotations_provisions: ["6815"]
+      autres_charges: ["65"]
+      # 655 (quotes-parts de résultat) → hors exploitation
+      autres_charges_exclusions: ["655"]
 
   pl_detaille:
     produits_financiers: []

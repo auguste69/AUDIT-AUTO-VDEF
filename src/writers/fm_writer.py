@@ -4,9 +4,11 @@ Générateur de feuilles maîtresses FM_{client}_{annee}.xlsx.
 Onglets produits :
   1. Sommaire
   2. Balance N Vs N-1  (tous les comptes, valeurs brutes)
-  3. Tréso              (BFR, FRNG, TN — agrégé par poste)
-  4. AACE               (Autres Achats et Charges Externes — comptes 606-609, 61x, 62x)
-  5. Un onglet par cycle  (A0, V0, C Propres0, …)
+  3. Bilan              (Actif / Passif synthétiques côte à côte)
+  4. EBIT               (résultat d'exploitation, cerfa 2052)
+  5. Tréso              (BFR, FRNG, TN — agrégé par poste)
+  6. AACE               (Autres Achats et Charges Externes — comptes 606-609, 61x, 62x)
+  7. Un onglet par cycle  (A0, V0, C Propres0, …)
      — sections ACTIF / PASSIF / CHARGES / PRODUITS (seulement si non vides)
      — convention de signe : PASSIF et PRODUITS sont présentés en positif (Solde × -1)
 """
@@ -19,8 +21,11 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
-from src.engine.financial_engine import calculer_bilan, calculer_treso, filtrer_aace
+from src.engine.financial_engine import (
+    calculer_bilan, calculer_ebit, calculer_treso, filtrer_aace,
+)
 from src.engine.liasse_fiscale_loader import load_liasse_fiscale
+from src.writers.fm.ebit import ecrire_ebit_tab
 from src.writers.styles import (
     remove_gridlines, set_col_widths, write_title_block,
     write_header_row, write_data_row, write_section_label, write_total_row,
@@ -84,6 +89,10 @@ def _var_pct_val(var_pct) -> Union[float, str]:
 # ---------------------------------------------------------------------------
 
 def _ecrire_sommaire(ws, client: str, date_cloture: str, cycles: list) -> None:
+    # NB : la liste des feuilles maîtresses (rows 12-14) est statique — elle
+    # n'est pas générée depuis les onglets du classeur. Elle est figée par la
+    # fixture de régression cellulaire (tests/fixtures/FM_GILAC_2025_POST_FIX
+    # .xlsx) : ne pas y insérer de ligne sans régénérer la fixture.
     remove_gridlines(ws)
     set_col_widths(ws, {"A": 4, "B": 30, "C": 50})
 
@@ -583,6 +592,9 @@ def write(
         )
         pcg_config = from_pcg_config(_PCG_DEFAULT)
     liasse_fiscale = load_liasse_fiscale(pcg_config)
+    # La section ebit n'est pas couverte par load_liasse_fiscale (validation
+    # déléguée à calculer_ebit) — l'ajouter depuis la section brute du YAML.
+    liasse_fiscale["ebit"] = (pcg_config.get("liasse_fiscale") or {}).get("ebit") or {}
 
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -626,6 +638,11 @@ def write(
     ws_bilan = wb.create_sheet("Bilan")
     _ecrire_bilan_tab(ws_bilan, balance_mappee, date_n, date_n1, client,
                       liasse_fiscale)
+
+    # --- EBIT (entre Bilan et Tréso) ---
+    ws_ebit = wb.create_sheet("EBIT")
+    ebit = calculer_ebit(balance_mappee, liasse_fiscale)
+    ecrire_ebit_tab(ws_ebit, ebit, date_n, date_n1, client)
 
     # --- Tréso ---
     ws_treso = wb.create_sheet("Tréso")

@@ -1,5 +1,5 @@
 """
-Moteur de calcul des états financiers synthétiques (Bilan, Tréso, AACE).
+Moteur de calcul des états financiers synthétiques (Bilan, Tréso, EBIT, AACE).
 
 Sépare le calcul métier de la présentation Excel : fm_writer.py consomme
 les objets retournés ici (BilanSynthetique, TresoSynthetique, DataFrame
@@ -21,6 +21,7 @@ import pandas as pd
 
 from src.models.financial_statements import (
     BilanSynthetique,
+    EbitSynthetique,
     PosteComptable,
     TresoSynthetique,
 )
@@ -376,6 +377,133 @@ def calculer_treso(balance: pd.DataFrame,
         frng=PosteComptable("frng", frng[0], frng[1]),
         bfr=PosteComptable("bfr", bfr[0], bfr[1]),
         tn=PosteComptable("tn", tn[0], tn[1]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# EBIT (résultat d'exploitation)
+# ---------------------------------------------------------------------------
+
+# Clés de postes EBIT, dans l'ordre de présentation du cerfa 2052.
+_POSTES_EBIT_PRODUITS: List[str] = [
+    "ventes_marchandises", "production_vendue", "production_stockee",
+    "production_immobilisee", "subventions_exploitation",
+    "reprises_transferts", "autres_produits",
+]
+_POSTES_EBIT_CHARGES: List[str] = [
+    "achats_marchandises", "variation_stocks_marchandises",
+    "achats_matieres_premieres", "variation_stocks_matieres",
+    "autres_charges_externes", "impots_taxes", "salaires_traitements",
+    "charges_sociales", "dotations_amortissements",
+    "dotations_dep_immobilisations", "dotations_dep_actif_circulant",
+    "dotations_provisions", "autres_charges",
+]
+
+
+def _sommer_poste_avec_exclusions(balance: pd.DataFrame, section: dict,
+                                  cle: str, colonne: str,
+                                  chemin: str) -> float:
+    """Somme un poste EBIT : préfixes inclus moins préfixes exclus.
+
+    Les exclusions sont portées par la clé "<cle>_exclusions" de la section
+    (sous-préfixes plus spécifiques, ex. "709 sauf 7097") — voir le
+    commentaire de la section liasse_fiscale.ebit du mapping_pcg.yaml.
+    """
+    if cle not in section:
+        raise ValueError(
+            f"liasse_fiscale.ebit.{chemin} : clé obligatoire '{cle}' "
+            f"absente. Clés disponibles : {sorted(section.keys())}."
+        )
+    prefixes = [str(p) for p in (section[cle] or [])]
+    exclusions = [str(p) for p in (section.get(f"{cle}_exclusions") or [])]
+    total = _sommer_prefixes(balance, prefixes, colonne) if prefixes else 0.0
+    if exclusions:
+        total -= _sommer_prefixes(balance, exclusions, colonne)
+    return total
+
+
+def calculer_ebit(balance: pd.DataFrame,
+                  liasse_config: dict) -> EbitSynthetique:
+    """
+    Calcule le résultat d'exploitation (EBIT) pour N et N-1.
+
+    Les listes de préfixes proviennent de liasse_config["ebit"] (section
+    liasse_fiscale du mapping_pcg.yaml). Chaque poste peut porter une clé
+    "<poste>_exclusions" listant les sous-préfixes à déduire (ex. 709 sauf
+    7097). Seuls les signes de présentation restent dans ce code :
+
+    - produits (classe 7, créditeurs → Solde_KE négatif) : × -1 → positif ;
+    - charges (classe 6, débitrices → Solde_KE positif) : telles quelles ;
+    - EBIT = total produits − total charges.
+
+    Paramètres
+    ----------
+    balance : pd.DataFrame
+        Balance avec colonnes CompteNum, Solde_KE, Solde_N1_KE.
+    liasse_config : dict
+        Dict contenant la clé "ebit" (section liasse_fiscale du YAML,
+        sous-sections produits_exploitation et charges_exploitation).
+
+    Retourne
+    --------
+    EbitSynthetique
+        Postes détaillés + agrégats CA, total produits, total charges, EBIT.
+
+    Lève
+    ----
+    ValueError
+        Si la section ebit (ou une de ses clés obligatoires) est absente.
+    """
+    ebit_cfg = liasse_config.get("ebit") or {}
+    p_prod = ebit_cfg.get("produits_exploitation")
+    p_chrg = ebit_cfg.get("charges_exploitation")
+    if not p_prod or not p_chrg:
+        raise ValueError(
+            "liasse_fiscale.ebit : sous-sections 'produits_exploitation' et "
+            "'charges_exploitation' requises — vérifier mapping_pcg.yaml."
+        )
+
+    def sp(section: dict, cle: str, chemin: str, signe: int) -> tuple:
+        """Somme un poste (avec exclusions) × signe, pour N et N-1."""
+        return (
+            round(_sommer_poste_avec_exclusions(
+                balance, section, cle, "Solde_KE", chemin) * signe, 3),
+            round(_sommer_poste_avec_exclusions(
+                balance, section, cle, "Solde_N1_KE", chemin) * signe, 3),
+        )
+
+    # Produits × -1 (créditeurs → affichage positif), charges telles quelles.
+    produits = {cle: sp(p_prod, cle, "produits_exploitation", -1)
+                for cle in _POSTES_EBIT_PRODUITS}
+    charges = {cle: sp(p_chrg, cle, "charges_exploitation", 1)
+               for cle in _POSTES_EBIT_CHARGES}
+
+    def add(valeurs: list) -> tuple:
+        return (round(sum(v[0] for v in valeurs), 3),
+                round(sum(v[1] for v in valeurs), 3))
+
+    ca = add([produits["ventes_marchandises"],
+              produits["production_vendue"]])
+    total_produits = add(list(produits.values()))
+    total_charges = add(list(charges.values()))
+    ebit = (round(total_produits[0] - total_charges[0], 3),
+            round(total_produits[1] - total_charges[1], 3))
+
+    logger.info(
+        "EBIT : CA N=%.1f K€, produits N=%.1f, charges N=%.1f, EBIT N=%.1f K€",
+        ca[0], total_produits[0], total_charges[0], ebit[0],
+    )
+
+    postes = {**produits, **charges}
+    return EbitSynthetique(
+        postes={cle: PosteComptable(cle, v[0], v[1])
+                for cle, v in postes.items()},
+        ca=PosteComptable("ca", ca[0], ca[1]),
+        total_produits=PosteComptable("total_produits", total_produits[0],
+                                      total_produits[1]),
+        total_charges=PosteComptable("total_charges", total_charges[0],
+                                     total_charges[1]),
+        ebit=PosteComptable("ebit", ebit[0], ebit[1]),
     )
 
 
