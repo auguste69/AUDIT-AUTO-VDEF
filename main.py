@@ -56,6 +56,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Chemin vers mapping_pcg.yaml")
     p.add_argument("--no-templates", action="store_true",
                    help="Désactive la génération des feuilles de travail")
+    p.add_argument("--bilan-non-bloquant", action="store_true",
+                   help="Le contrôle d'équilibre du bilan (AC-1) devient un "
+                        "WARNING au lieu d'être bloquant")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Mode verbeux (DEBUG)")
     return p.parse_args()
@@ -69,11 +72,18 @@ def run_pipeline(
     templates_dir: Optional[str] = None,
     output_dir: str = "output",
     pcg_config_path: Optional[str] = None,
+    bilan_non_bloquant: bool = False,
 ) -> dict:
     """
     Exécute le pipeline complet et retourne un dict de résultats.
 
     Compatible CLI et Streamlit — aucun print(), tout passe par logging.
+
+    Paramètres notables
+    -------------------
+    bilan_non_bloquant : bool
+        Si True, le contrôle d'équilibre du bilan AC-1 est rétrogradé en
+        WARNING : le pipeline continue même si le bilan N est déséquilibré.
 
     Retourne
     --------
@@ -83,8 +93,9 @@ def run_pipeline(
     from src.parsers.fec_parser import parse
     from src.parsers.mapping_parser import from_fm, from_pcg_config
     from src.engine.balance_builder import build
-    from src.engine.controls import run_all
+    from src.engine.controls import run_all, run_controles_financiers
     from src.engine.cycle_mapper import map_cycles
+    from src.engine.liasse_fiscale_loader import load_liasse_fiscale
     from src.writers.excel_writer import write as write_travail
     from src.writers.fm_writer import write as write_fm
     from src.writers.template_writer import write as write_tpl
@@ -210,6 +221,41 @@ def run_pipeline(
         logger.info("  Cycle %-12s : %3d comptes", cycle, nb)
 
     # ------------------------------------------------------------------
+    # 5 bis. Contrôles financiers (AC-1 + cohérence résultat)
+    # ------------------------------------------------------------------
+    # Choix d'implémentation (le moins invasif) : les 9 contrôles FEC
+    # restent à l'étape 2 (avant la construction de la balance, comportement
+    # historique inchangé). AC-1 et la cohérence du résultat nécessitent la
+    # balance mappée, disponible seulement après map_cycles : ils sont donc
+    # exécutés ici via un second appel ciblé (run_controles_financiers,
+    # même moteur que run_all avec balance_mappee) sans ré-exécuter les
+    # 9 contrôles FEC.
+    liasse_config = load_liasse_fiscale(pcg)
+    controles_financiers = run_controles_financiers(
+        balance_mappee,
+        liasse_config,
+        bilan_non_bloquant=bilan_non_bloquant,
+    )
+    controles.extend(controles_financiers)
+    resultats["controles"] = controles
+
+    for nom, ok, detail, sev in controles_financiers:
+        symbole = "✓" if ok else "✗"
+        logger.info("  [%s] %s (%s) — %s", symbole, nom, sev, detail.split("\n")[0])
+
+    bilan_bloquants_ko = [
+        c for c in controles_financiers if c[3] == "BLOQUANT" and not c[1]
+    ]
+    if bilan_bloquants_ko:
+        msg = (
+            f"Bilan déséquilibré — {bilan_bloquants_ko[0][2].splitlines()[0]} "
+            f"Corrigez le FEC ou le mapping, ou relancez avec "
+            f"--bilan-non-bloquant pour forcer la génération."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    # ------------------------------------------------------------------
     # 6. Feuilles maîtresses
     # ------------------------------------------------------------------
     logger.info("=== ÉTAPE 5/5 — Génération des fichiers ===")
@@ -262,6 +308,7 @@ def main() -> None:
             templates_dir=templates,
             output_dir=args.output,
             pcg_config_path=args.pcg_config,
+            bilan_non_bloquant=args.bilan_non_bloquant,
         )
     except ValueError as exc:
         logger.error("Erreur bloquante : %s", exc)

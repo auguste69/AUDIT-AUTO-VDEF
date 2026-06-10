@@ -51,6 +51,7 @@ def _run_pipeline_cached(
     n1_nom: Optional[str],
     templates_bytes: Optional[dict],  # {nom: bytes}
     pcg_path: str,
+    bilan_non_bloquant: bool = False,
 ) -> dict:
     """
     Exécute le pipeline dans un dossier temporaire et retourne les résultats
@@ -90,6 +91,7 @@ def _run_pipeline_cached(
             templates_dir=str(tpl_dir) if tpl_dir else None,
             output_dir=str(output_dir),
             pcg_config_path=pcg_path,
+            bilan_non_bloquant=bilan_non_bloquant,
         )
 
         # Lire les fichiers générés en mémoire avant la fin du contexte temp
@@ -151,6 +153,17 @@ with st.sidebar:
             accept_multiple_files=True,
         )
 
+    st.subheader("5 · Options")
+    bilan_non_bloquant = st.checkbox(
+        "Bilan non bloquant",
+        value=False,
+        help=(
+            "Si coché, le contrôle d'équilibre du bilan (AC-1) devient un "
+            "WARNING : le pipeline continue même si Total Actif ≠ Total Passif "
+            "sur l'exercice N."
+        ),
+    )
+
     st.divider()
     run_btn = st.button("🚀 Lancer le pipeline", type="primary", use_container_width=True)
 
@@ -166,6 +179,7 @@ _current_input_key = (
     n1_upload.size if n1_upload else None,
     use_bundled_tpl,
     tuple(sorted(f.name for f in tpl_uploads)) if tpl_uploads else None,
+    bilan_non_bloquant,
 )
 
 if st.session_state.get("_input_key") != _current_input_key:
@@ -219,6 +233,7 @@ if run_btn:
                 n1_nom=n1_upload.name,
                 templates_bytes=templates_bytes,
                 pcg_path=str(_PCG_DEFAULT),
+                bilan_non_bloquant=bilan_non_bloquant,
             )
         except ValueError as exc:
             st.error(f"**Erreur bloquante** : {exc}")

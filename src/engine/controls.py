@@ -13,9 +13,12 @@ Severity :
 import logging
 import math
 from collections import Counter
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
+
+# Import engine → engine uniquement (jamais src/writers/)
+from src.engine.financial_engine import calculer_bilan
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +41,18 @@ def run_all(
     date_cloture: str,
     seuil_montant_rond: float = 10_000.0,
     seuil_benford_mad: float = 0.015,
+    balance_mappee: Optional[pd.DataFrame] = None,
+    liasse_config: Optional[dict] = None,
+    seuil_equilibre_bilan_ke: float = 1.0,
+    bilan_non_bloquant: bool = False,
 ) -> List[ResultatControle]:
     """
     Exécute tous les contrôles d'intégrité sur le FEC.
+
+    Si balance_mappee ET liasse_config sont fournis, deux contrôles
+    financiers supplémentaires sont exécutés (équilibre du bilan AC-1 et
+    cohérence du résultat). Sinon, seuls les 9 contrôles FEC historiques
+    sont exécutés (rétrocompatibilité totale).
 
     Paramètres
     ----------
@@ -52,6 +64,15 @@ def run_all(
         Seuil en € au-dessus duquel un montant rond est signalé (défaut : 10 000).
     seuil_benford_mad : float
         Seuil du MAD Benford au-dessus duquel la distribution est anormale (défaut : 0.015).
+    balance_mappee : pd.DataFrame, optionnel
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE) — active
+        les contrôles financiers AC-1 et cohérence du résultat.
+    liasse_config : dict, optionnel
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_equilibre_bilan_ke : float
+        Seuil de tolérance de l'écart Actif/Passif en K€ (défaut : 1.0 K€).
+    bilan_non_bloquant : bool
+        Si True, le contrôle AC-1 est rétrogradé en WARNING (jamais bloquant).
 
     Retourne
     --------
@@ -88,6 +109,78 @@ def run_all(
         except Exception as exc:  # noqa: BLE001
             logger.error("Erreur dans le contrôle %s : %s", controle.__name__, exc)
             resultats.append((controle.__name__, False, f"Erreur inattendue : {exc}", "BLOQUANT"))
+
+    # Contrôles financiers (AC-1 + cohérence résultat) — uniquement si la
+    # balance mappée et la config liasse sont disponibles. Si l'un des deux
+    # est None, le comportement historique (9 contrôles) est inchangé.
+    if balance_mappee is not None and liasse_config is not None:
+        resultats.extend(
+            run_controles_financiers(
+                balance_mappee,
+                liasse_config,
+                seuil_equilibre_bilan_ke=seuil_equilibre_bilan_ke,
+                bilan_non_bloquant=bilan_non_bloquant,
+            )
+        )
+
+    return resultats
+
+
+def run_controles_financiers(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_equilibre_bilan_ke: float = 1.0,
+    bilan_non_bloquant: bool = False,
+) -> List[ResultatControle]:
+    """
+    Exécute les contrôles financiers sur la balance mappée :
+    AC-1 (équilibre du bilan) et cohérence du résultat.
+
+    Appelable séparément de run_all() : dans le pipeline, les 9 contrôles
+    FEC tournent avant la construction de la balance, alors que ces deux
+    contrôles nécessitent la balance mappée (disponible après map_cycles).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_equilibre_bilan_ke : float
+        Seuil de tolérance de l'écart Actif/Passif en K€ (défaut : 1.0 K€).
+    bilan_non_bloquant : bool
+        Si True, AC-1 est rétrogradé en WARNING.
+
+    Retourne
+    --------
+    list[tuple[str, bool, str, str]]
+        Liste de (nom_controle, ok, detail, severity) — 2 éléments.
+    """
+    resultats: List[ResultatControle] = []
+
+    controles = [
+        (_ctrl_bilan_equilibre, "WARNING" if bilan_non_bloquant else "BLOQUANT"),
+        (_ctrl_coherence_resultat, "WARNING"),
+    ]
+    for controle, severity_erreur in controles:
+        try:
+            res = controle(
+                balance_mappee,
+                liasse_config,
+                seuil_equilibre_bilan_ke=seuil_equilibre_bilan_ke,
+                bilan_non_bloquant=bilan_non_bloquant,
+            )
+            resultats.append(res)
+            statut = "OK" if res[1] else "KO"
+            logger.info("[%s] %s — %s", statut, res[0], res[2].split("\n")[0])
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Erreur dans le contrôle %s : %s", controle.__name__, exc)
+            resultats.append((
+                controle.__name__,
+                False,
+                f"Erreur inattendue lors du contrôle financier : {exc}",
+                severity_erreur,
+            ))
 
     return resultats
 
@@ -309,3 +402,119 @@ def _ctrl_ecritures_tardives(
         else f"Aucune écriture tardive (seuil : {seuil.strftime('%d/%m/%Y')})"
     )
     return ("Écritures tardives", ok, detail, "WARNING")
+
+
+# =============================================================================
+# Contrôles financiers (sur la balance mappée)
+# =============================================================================
+
+def _ctrl_bilan_equilibre(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_equilibre_bilan_ke: float = 1.0,
+    bilan_non_bloquant: bool = False,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle AC-1 : équilibre du bilan (Total Actif = Total Passif).
+
+    BLOQUANT uniquement sur l'écart N : |Total Actif N − Total Passif N|
+    doit être ≤ seuil_equilibre_bilan_ke (défaut : 1.0 K€).
+
+    L'écart N-1 est contrôlé en WARNING uniquement (jamais bloquant) :
+    les données N-1 proviennent du FM historique du client et peuvent
+    porter un écart non corrigeable.
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_equilibre_bilan_ke : float
+        Seuil de tolérance de l'écart en K€ (défaut : 1.0 K€).
+    bilan_non_bloquant : bool
+        Si True, la sévérité du contrôle devient WARNING.
+    """
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    actif_n, actif_n1 = bilan.total_actif.as_tuple()
+    passif_n, passif_n1 = bilan.total_passif.as_tuple()
+
+    ecart_n = abs(actif_n - passif_n)
+    ecart_n1 = abs(actif_n1 - passif_n1)
+
+    ok = bool(ecart_n <= seuil_equilibre_bilan_ke)
+    severity = "WARNING" if bilan_non_bloquant else "BLOQUANT"
+
+    detail = (
+        f"Bilan N : Actif={actif_n:,.1f} K€ / Passif={passif_n:,.1f} K€ — "
+        f"écart={ecart_n:.3f} K€ (seuil : {seuil_equilibre_bilan_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — le bilan de l'exercice N est déséquilibré : vérifier le FEC "
+            "et le mapping des comptes (mapping_pcg.yaml)."
+        )
+
+    if ecart_n1 > seuil_equilibre_bilan_ke:
+        msg_n1 = (
+            f"WARNING N-1 : écart Actif/Passif = {ecart_n1:.3f} K€ "
+            f"(Actif={actif_n1:,.1f} K€ / Passif={passif_n1:,.1f} K€) — "
+            f"non bloquant, données issues du FM historique du client."
+        )
+        detail += "\n  " + msg_n1
+        logger.warning("Équilibre du bilan (AC-1) — %s", msg_n1)
+
+    return ("Équilibre du bilan (AC-1)", ok, detail, severity)
+
+
+def _ctrl_coherence_resultat(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_resultat_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence du résultat (WARNING, jamais bloquant).
+
+    Vérifie que le résultat comptable déduit de la balance
+    (− somme des soldes des classes 6 et 7) est cohérent avec le poste
+    résultat du bilan (comptes 12x + résultat en cours classes 6/7),
+    avec une tolérance de 1 K€.
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_resultat_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    # Résultat déduit de la balance : − (somme classes 6 et 7)
+    masque_67 = balance_mappee["CompteNum"].astype(str).str.startswith(("6", "7"))
+    resultat_balance = -float(balance_mappee.loc[masque_67, "Solde_KE"].sum())
+
+    # Poste résultat du bilan : compte 12x + résultat en cours (classes 6/7)
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    resultat_bilan = (
+        bilan.postes["resultat"].valeur_n
+        + bilan.postes["resultat_encours"].valeur_n
+    )
+
+    ecart = abs(resultat_balance - resultat_bilan)
+    ok = bool(ecart <= seuil_coherence_resultat_ke)
+
+    detail = (
+        f"Résultat déduit de la balance (− classes 6/7) = {resultat_balance:,.1f} K€ / "
+        f"poste résultat du bilan (12x + résultat en cours) = {resultat_bilan:,.1f} K€ — "
+        f"écart={ecart:.3f} K€ (tolérance : {seuil_coherence_resultat_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : le résultat de l'exercice ne correspond pas "
+            "entre la balance et le bilan (résultat déjà affecté en 12x ou "
+            "mapping incomplet)."
+        )
+
+    return ("Cohérence du résultat", ok, detail, "WARNING")
