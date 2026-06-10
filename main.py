@@ -213,7 +213,8 @@ def run_pipeline(
     # 6. Feuilles maîtresses
     # ------------------------------------------------------------------
     logger.info("=== ÉTAPE 5/5 — Génération des fichiers ===")
-    fm_path = write_fm(balance_mappee, client, date_cloture, output)
+    fm_path = write_fm(balance_mappee, client, date_cloture, output,
+                       pcg_config=pcg)
     resultats["fm_path"] = fm_path
     logger.info("Feuilles maîtresses : %s", fm_path)
 

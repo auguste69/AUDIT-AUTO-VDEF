@@ -86,6 +86,10 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
       ordre_cycles    : list[str]
       noms_cycles     : dict {code: nom_long}
       seuils          : dict
+      templates       : dict {nom_template: cycle}
+      liasse_fiscale  : dict — section brute du YAML (préfixes des états
+                        financiers Bilan/Tréso/AACE/EBIT/P&L), validée par
+                        src.engine.liasse_fiscale_loader.load_liasse_fiscale
     """
     chemin = Path(path)
     if not chemin.exists():
@@ -129,6 +133,7 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
         "noms_cycles":     config.get("noms_cycles", {}),
         "seuils":          config.get("seuils", {}),
         "templates":       templates,
+        "liasse_fiscale":  config.get("liasse_fiscale") or {},
     }
 
 
