@@ -447,6 +447,106 @@ templates:
   X_Re_sultat: X
 
 # =============================================================================
+# LIASSE FISCALE — Mapping des préfixes PCG vers les postes des états
+# financiers (Bilan cerfa 2050/2051, Tréso, AACE, EBIT cerfa 2052,
+# P&L détaillé cerfa 2052/2053).
+# Structure créée vide (prompt 3) — remplie par les prompts 4, 9 et 10.
+# =============================================================================
+liasse_fiscale:
+
+  bilan:
+    actif:
+      capital_souscrit_non_appele: []
+      immo_incorp: []
+      immo_corp: []
+      immo_fi: []
+      stocks: []
+      avances_acomptes_verses: []
+      creances_clients: []
+      autres_creances: []
+      vmp: []
+      disponibilites: []
+      cca: []
+    passif:
+      capital: []
+      primes: []
+      reserve_legale: []
+      autres_reserves: []
+      report_nouveau: []
+      resultat_exercice: []
+      resultat_en_cours: []
+      subventions: []
+      prov_reglementees: []
+      prov_risques: []
+      prov_charges: []
+      emprunts: []
+      dettes_fournisseurs: []
+      dettes_fiscales_sociales: []
+      autres_dettes: []
+      pca: []
+    comptes_bascule:
+      prefixes: []
+
+  treso:
+    ressources_stables:
+      capitaux_propres: []
+      amort_dep: []
+      prov_risques: []
+      dettes_financieres_mlt: []
+    emplois_stables:
+      actif_immobilise_brut: []
+    actif_circulant_exploitation:
+      stocks: []
+      creances_clients: []
+      autres_creances: []
+      cca: []
+    passif_circulant_exploitation:
+      dettes_fournisseurs: []
+      dettes_fiscales_sociales: []
+      autres_dettes: []
+      pca: []
+    tresorerie_directe:
+      tresorerie_active: []
+      tresorerie_passive_519: []
+      tresorerie_passive_512: []
+
+  aace:
+    prefixes: []
+
+  ebit:
+    produits_exploitation:
+      ventes_marchandises: []
+      production_vendue: []
+      production_stockee: []
+      production_immobilisee: []
+      subventions_exploitation: []
+      reprises_transferts: []
+      autres_produits: []
+    charges_exploitation:
+      achats_marchandises: []
+      variation_stocks_marchandises: []
+      achats_matieres_premieres: []
+      variation_stocks_matieres: []
+      autres_charges_externes: []
+      impots_taxes: []
+      salaires_traitements: []
+      charges_sociales: []
+      # Dotations en 4 lignes distinctes (cerfa 2052 : GA / GB / GC / GD)
+      dotations_amortissements: []
+      dotations_dep_immobilisations: []
+      dotations_dep_actif_circulant: []
+      dotations_provisions: []
+      autres_charges: []
+
+  pl_detaille:
+    produits_financiers: []
+    charges_financieres: []
+    produits_exceptionnels: []
+    charges_exceptionnelles: []
+    participation_salaries: []
+    impots_benefices: []
+
+# =============================================================================
 # SURCHARGES CABINET — Personnalisez ici
 # =============================================================================
 # Format : "prefixe": cycle
