@@ -105,6 +105,10 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
       liasse_fiscale  : dict — section brute du YAML (préfixes des états
                         financiers Bilan/Tréso/AACE/EBIT/P&L), validée par
                         src.engine.liasse_fiscale_loader.load_liasse_fiscale
+      actif_detaille_structure  : dict — structure de présentation de
+                        l'Actif détaillé (cerfa 2050, racine du YAML)
+      passif_detaille_structure : dict — structure de présentation du
+                        Passif détaillé (cerfa 2051, racine du YAML)
     """
     chemin = Path(path)
     if not chemin.exists():
@@ -149,6 +153,10 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
         "seuils":          config.get("seuils", {}),
         "templates":       templates,
         "liasse_fiscale":  config.get("liasse_fiscale") or {},
+        # Structures de présentation des états détaillés (racine du YAML,
+        # cerfa 2050/2051) — consommées via load_liasse_fiscale
+        "actif_detaille_structure":  config.get("actif_detaille_structure") or {},
+        "passif_detaille_structure": config.get("passif_detaille_structure") or {},
     }
 
 

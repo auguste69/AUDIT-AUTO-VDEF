@@ -144,6 +144,7 @@ def test_onglet_ebit_existe(fm_sheetnames):
 
 
 def test_onglet_ebit_entre_bilan_et_treso(fm_sheetnames):
-    """L'onglet EBIT est positionné entre Bilan et Tréso."""
+    """L'onglet EBIT est positionné entre Bilan et Tréso (les onglets
+    cerfa détaillés du prompt 10 s'intercalent entre EBIT et Tréso)."""
     assert fm_sheetnames.index("EBIT") == fm_sheetnames.index("Bilan") + 1
-    assert fm_sheetnames.index("Tréso") == fm_sheetnames.index("EBIT") + 1
+    assert fm_sheetnames.index("EBIT") < fm_sheetnames.index("Tréso")

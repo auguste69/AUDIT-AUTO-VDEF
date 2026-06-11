@@ -599,13 +599,242 @@ liasse_fiscale:
       # 655 (quotes-parts de résultat) → hors exploitation
       autres_charges_exclusions: ["655"]
 
+  # ---------------------------------------------------------------------------
+  # P&L détaillé (cerfa 2052/2053) — postes hors exploitation
+  #
+  # La partie exploitation est calculée en RÉSIDUEL des classes 6/7 : tout
+  # compte 6x/7x non capturé par les postes ci-dessous est rattaché à
+  # l'exploitation (financial_engine.calculer_pl_detaille). Le résultat net
+  # du P&L est donc toujours égal à −(somme des classes 6 et 7), quel que
+  # soit le plan de comptes du client.
+  #
+  # Convention de signe : chaque poste = −solde (produits créditeurs →
+  # positif, charges débitrices → négatif).
+  # ---------------------------------------------------------------------------
   pl_detaille:
-    produits_financiers: []
-    charges_financieres: []
-    produits_exceptionnels: []
-    charges_exceptionnelles: []
-    participation_salaries: []
-    impots_benefices: []
+    # 786/796 : reprises sur dépréciations et transferts de charges financiers
+    produits_financiers: ["76", "786", "796"]
+    charges_financieres: ["66", "686"]
+    # 787/797 : reprises sur dépréciations et transferts de charges exceptionnels
+    produits_exceptionnels: ["77", "787", "797"]
+    charges_exceptionnelles: ["67", "687"]
+    participation_salaries: ["691"]
+    # IS = 695 (impôt sur les bénéfices) + 698 (intégration fiscale)
+    # + 699 (produit de carry-back, créditeur — déduit automatiquement
+    # par le signe). NE PAS omettre 698.
+    impots_benefices: ["695", "698", "699"]
+    # Quotes-parts de résultat sur opérations faites en commun
+    # (655 charges, 755 produits) — exclues de l'EBIT, présentées entre le
+    # résultat d'exploitation et le résultat financier dans la liasse 2052
+    quotes_parts: ["655", "755"]
+
+# =============================================================================
+# ÉTATS DÉTAILLÉS (cerfa 2050 / 2051) — structures de présentation
+# =============================================================================
+# Sections à la RACINE du YAML (la section liasse_fiscale est figée à 5 clés
+# par tests/test_mapping_liasse_fiscale_structure.py, et ses feuilles doivent
+# être des listes — or ces structures portent des libellés).
+#
+# Chaque poste :
+#   - prefixes       : préfixes sommés sans condition
+#   - prefixes_cond  : préfixes sommés uniquement si le solde du compte
+#                      vérifie la condition (">0" actif / "<0" passif) —
+#                      reflet des comptes_bascule du bilan synthétique
+#   - condition      : ">0" ou "<0" (obligatoire si prefixes_cond présent)
+#
+# Les partitions reprennent EXACTEMENT les listes du bilan synthétique
+# (liasse_fiscale.bilan) raffinées par sous-poste : le total de l'Actif
+# détaillé est donc strictement égal au Total Actif du bilan (contrôle
+# _ctrl_coherence_actif_detaille).
+# =============================================================================
+
+actif_detaille_structure:
+  sections:
+    - cle: capital_non_appele
+      sous_total: null
+      postes:
+        - cle: capital_souscrit_non_appele
+          libelle: "Capital souscrit non appelé"
+          prefixes: ["109"]
+    - cle: immo_incorp
+      sous_total: "Immobilisations incorporelles"
+      postes:
+        - {cle: frais_etablissement, libelle: "Frais d'établissement",
+           prefixes: ["201", "2801", "2901"]}
+        - {cle: frais_rd, libelle: "Frais de recherche et développement",
+           prefixes: ["203", "2803", "2903"]}
+        - {cle: concessions_brevets,
+           libelle: "Concessions, brevets, licences, logiciels et droits similaires",
+           prefixes: ["205", "2805", "2905"]}
+        - {cle: droit_bail, libelle: "Droit au bail",
+           prefixes: ["206", "2806", "2906"]}
+        - {cle: fonds_commercial, libelle: "Fonds commercial",
+           prefixes: ["207", "2807", "2907"]}
+        - {cle: autres_immo_incorp, libelle: "Autres immobilisations incorporelles",
+           prefixes: ["208", "2808", "2908"]}
+        - {cle: immo_incorp_en_cours, libelle: "Immobilisations incorporelles en cours",
+           prefixes: ["232"]}
+        - {cle: avances_immo_incorp,
+           libelle: "Avances et acomptes sur immobilisations incorporelles",
+           prefixes: ["237"]}
+    - cle: immo_corp
+      sous_total: "Immobilisations corporelles"
+      postes:
+        - {cle: terrains, libelle: "Terrains",
+           prefixes: ["211", "212", "2811", "2812", "2911", "2912"]}
+        - {cle: constructions, libelle: "Constructions",
+           prefixes: ["213", "214", "2813", "2814", "2913", "2914"]}
+        - {cle: itmoi,
+           libelle: "Installations techniques, matériel et outillage industriels",
+           prefixes: ["215", "2815", "2915"]}
+        - {cle: autres_immo_corp, libelle: "Autres immobilisations corporelles",
+           prefixes: ["218", "2818", "2918"]}
+        - {cle: immo_corp_en_cours, libelle: "Immobilisations corporelles en cours",
+           prefixes: ["231"]}
+        - {cle: avances_immo_corp,
+           libelle: "Avances et acomptes sur immobilisations corporelles",
+           prefixes: ["238"]}
+    - cle: immo_fi
+      sous_total: "Immobilisations financières"
+      postes:
+        - {cle: participations, libelle: "Participations",
+           prefixes: ["261", "266", "2961", "2966"]}
+        - {cle: creances_participations,
+           libelle: "Créances rattachées à des participations",
+           prefixes: ["267", "268", "2967", "2968"]}
+        - {cle: autres_titres, libelle: "Autres titres immobilisés",
+           prefixes: ["271", "272", "273", "2971", "2972", "2973"]}
+        - {cle: prets, libelle: "Prêts", prefixes: ["274", "2974"]}
+        - {cle: depots_cautionnements, libelle: "Dépôts et cautionnements versés",
+           prefixes: ["275", "2975"]}
+        - {cle: autres_creances_immo, libelle: "Autres créances immobilisées",
+           prefixes: ["276", "277", "2976", "2977"]}
+    - cle: stocks
+      sous_total: "Stocks et en-cours"
+      postes:
+        - {cle: matieres_premieres,
+           libelle: "Matières premières et autres approvisionnements",
+           prefixes: ["31", "32", "391", "392"]}
+        - {cle: en_cours_production,
+           libelle: "En-cours de production (biens et services)",
+           prefixes: ["33", "34", "393", "394"]}
+        - {cle: produits_intermediaires_finis,
+           libelle: "Produits intermédiaires et finis",
+           prefixes: ["35", "395"]}
+        - {cle: marchandises, libelle: "Marchandises", prefixes: ["37", "397"]}
+    - cle: avances_acomptes
+      sous_total: null
+      postes:
+        - {cle: avances_acomptes_verses,
+           libelle: "Avances et acomptes versés sur commandes",
+           prefixes: ["4091"]}
+    - cle: creances
+      sous_total: "Créances"
+      postes:
+        - {cle: clients, libelle: "Clients et comptes rattachés",
+           prefixes: ["411", "413", "416", "418", "491"]}
+        - {cle: fournisseurs_debiteurs, libelle: "Fournisseurs débiteurs",
+           prefixes: ["4096", "4097", "4098"]}
+        - {cle: creances_sociales, libelle: "Créances sociales",
+           prefixes: [], prefixes_cond: ["425"], condition: ">0"}
+        - {cle: creances_fiscales, libelle: "Créances fiscales",
+           prefixes: ["441", "4456"],
+           prefixes_cond: ["443", "444"], condition: ">0"}
+        - {cle: comptes_courants_debiteurs, libelle: "Comptes courants débiteurs",
+           prefixes: [], prefixes_cond: ["451", "455"], condition: ">0"}
+        - {cle: creances_diverses, libelle: "Créances diverses",
+           prefixes: ["462", "465", "471"],
+           prefixes_cond: ["467", "478"], condition: ">0"}
+        - {cle: capital_appele_non_verse,
+           libelle: "Capital souscrit - appelé, non versé",
+           prefixes: [], prefixes_cond: ["456"], condition: ">0"}
+    - cle: tresorerie
+      sous_total: "Trésorerie"
+      postes:
+        # 509 (versements restant à effectuer) suit la convention du bilan
+        # synthétique : inclus dans "50" + reclassé par bascule si > 0
+        - {cle: vmp, libelle: "Valeurs mobilières de placement",
+           prefixes: ["50", "590"], prefixes_cond: ["509"], condition: ">0"}
+        - {cle: disponibilites, libelle: "Disponibilités", prefixes: ["51", "53"]}
+    - cle: regularisation
+      sous_total: "Comptes de régularisation"
+      postes:
+        - {cle: cca, libelle: "Charges constatées d'avance",
+           prefixes: [], prefixes_cond: ["486", "487"], condition: ">0"}
+  agregats:
+    - cle: actif_immobilise
+      libelle: "Actif immobilisé net"
+      sections: [immo_incorp, immo_corp, immo_fi]
+      apres_section: immo_fi
+    - cle: actif_circulant
+      libelle: "Actif circulant"
+      sections: [stocks, avances_acomptes, creances, tresorerie]
+      apres_section: tresorerie
+  total:
+    libelle: "TOTAL ACTIF"
+
+passif_detaille_structure:
+  sections:
+    - cle: capitaux_propres
+      sous_total: "Capitaux propres"
+      postes:
+        - {cle: capital, libelle: "Capital social", prefixes: ["101", "108"]}
+        - {cle: primes, libelle: "Primes d'émission, de fusion, d'apport",
+           prefixes: ["104"]}
+        - {cle: reserve_legale, libelle: "Réserve légale", prefixes: ["1061"]}
+        - {cle: reserves_statutaires, libelle: "Réserves statutaires",
+           prefixes: ["1063"]}
+        # 1062 (réserves indisponibles) rattaché aux réserves réglementées
+        # par convention cabinet (avec 1064)
+        - {cle: reserves_reglementees, libelle: "Réserves réglementées",
+           prefixes: ["1062", "1064"]}
+        - {cle: autres_reserves, libelle: "Autres réserves", prefixes: ["1068"]}
+        - {cle: report_a_nouveau, libelle: "Report à nouveau", prefixes: ["11"]}
+        - {cle: resultat_exercice, libelle: "Résultat de l'exercice",
+           prefixes: ["12"]}
+        - {cle: resultat_en_cours, libelle: "Résultat en cours (classes 6 et 7)",
+           prefixes: ["6", "7"]}
+        - {cle: subventions, libelle: "Subventions d'investissement",
+           prefixes: ["13"]}
+        - {cle: provisions_reglementees, libelle: "Provisions réglementées",
+           prefixes: ["14"]}
+    - cle: provisions
+      sous_total: "Provisions pour risques et charges"
+      postes:
+        - {cle: provisions_risques, libelle: "Provisions pour risques",
+           prefixes: ["151"]}
+        - {cle: provisions_charges, libelle: "Provisions pour charges",
+           prefixes: ["152", "153", "154", "155", "156", "157", "158"]}
+    - cle: dettes
+      sous_total: "Dettes"
+      postes:
+        - {cle: emprunts, libelle: "Emprunts et dettes financières",
+           prefixes: ["16", "17", "519"]}
+        - {cle: avances_recues,
+           libelle: "Avances et acomptes reçus sur commandes en cours",
+           prefixes: ["4191"]}
+        - {cle: dettes_fournisseurs, libelle: "Fournisseurs et comptes rattachés",
+           prefixes: ["401", "403", "4081", "4088"]}
+        - {cle: dettes_fiscales_sociales, libelle: "Dettes fiscales et sociales",
+           prefixes: ["421", "422", "423", "424", "427", "428", "43", "442",
+                      "4455", "4457", "446", "447", "448", "449", "457"],
+           prefixes_cond: ["425", "443", "444"], condition: "<0"}
+        - {cle: dettes_immobilisations,
+           libelle: "Dettes sur immobilisations et comptes rattachés",
+           prefixes: ["404", "405", "4084"]}
+        - {cle: comptes_courants_crediteurs, libelle: "Comptes courants créditeurs",
+           prefixes: [], prefixes_cond: ["451", "455"], condition: "<0"}
+        - {cle: autres_dettes, libelle: "Autres dettes",
+           prefixes: ["4196", "4197", "4198", "464"],
+           prefixes_cond: ["456", "467", "478", "509"], condition: "<0"}
+    - cle: regularisation
+      sous_total: "Comptes de régularisation"
+      postes:
+        - {cle: pca, libelle: "Produits constatés d'avance",
+           prefixes: [], prefixes_cond: ["486", "487"], condition: "<0"}
+  agregats: []
+  total:
+    libelle: "TOTAL PASSIF"
 
 # =============================================================================
 # SURCHARGES CABINET — Personnalisez ici

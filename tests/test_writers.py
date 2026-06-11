@@ -75,13 +75,15 @@ class TestFichierGenere:
 class TestOnglets:
 
     ONGLETS_ATTENDUS = [
-        "Sommaire", "Balance N Vs N-1", "Bilan", "EBIT", "Tréso", "AACE",
+        "Sommaire", "Balance N Vs N-1", "Bilan", "EBIT",
+        "Actif détaillé", "Passif détaillé", "P&L détaillé",
+        "Tréso", "AACE",
         "C Propres0", "C PRC0", "F0", "I Incorp0", "I Corp0", "I Fi0",
         "S0", "A0", "V0", "P0", "E0", "T0", "X0",
     ]
 
     def test_nombre_onglets(self, fm_wb):
-        assert len(fm_wb.sheetnames) == 19
+        assert len(fm_wb.sheetnames) == 22
 
     def test_noms_onglets(self, fm_wb):
         assert fm_wb.sheetnames == self.ONGLETS_ATTENDUS
@@ -89,6 +91,7 @@ class TestOnglets:
     def test_ordre_cycles_canonique(self, fm_wb):
         """Les cycles suivent l'ordre PCG (C Propres en premier, X en dernier)."""
         _hors_cycles = {"Sommaire", "Balance N Vs N-1", "Bilan", "EBIT",
+                        "Actif détaillé", "Passif détaillé", "P&L détaillé",
                         "Tréso", "AACE"}
         cycles = [s for s in fm_wb.sheetnames if s not in _hors_cycles]
         assert cycles[0]  == "C Propres0"

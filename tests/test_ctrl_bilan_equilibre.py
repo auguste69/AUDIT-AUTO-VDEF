@@ -140,7 +140,7 @@ class TestBilanEquilibre:
 
 
 # ---------------------------------------------------------------------------
-# run_all : rétrocompatibilité 9 contrôles / extension 11 contrôles
+# run_all : rétrocompatibilité 9 contrôles / extension 13 contrôles
 # ---------------------------------------------------------------------------
 
 class TestRunAllRetrocompatibilite:
@@ -150,14 +150,16 @@ class TestRunAllRetrocompatibilite:
         resultats = run_all(_fec_minimal(), DATE_CLOTURE)
         assert len(resultats) == 9
 
-    def test_run_all_avec_balance_11_controles(self, liasse_config):
-        """run_all avec balance_mappee + liasse_config → 11 contrôles."""
+    def test_run_all_avec_balance_13_controles(self, liasse_config):
+        """run_all avec balance_mappee + liasse_config → 13 contrôles
+        (9 FEC + AC-1 + cohérence résultat + cohérence états détaillés
+        + cohérence résultat net P&L, prompt 10)."""
         resultats = run_all(
             _fec_minimal(), DATE_CLOTURE,
             balance_mappee=_balance_equilibree(),
             liasse_config=liasse_config,
         )
-        assert len(resultats) == 11
+        assert len(resultats) == 13
         noms = [r[0] for r in resultats]
         assert NOM_AC1 in noms
         assert "Cohérence du résultat" in noms
