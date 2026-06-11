@@ -493,7 +493,20 @@ Chaque template avec ses feuilles FM insérées comme onglets AVANT la Synthèse
 
 ---
 
-### P6 — Rapprochement de comptes N vs N-1 (HAUTE)
+### P6 — Rapprochement de comptes N vs N-1 (HAUTE) — ✅ IMPLÉMENTÉ (prompt 12)
+
+**Statut : implémenté.** Modules : `src/engine/account_matcher.py`
+(detecter_orphelins, scorer_matching, proposer_rapprochements,
+appliquer_rapprochements), `src/models/rapprochement.py` (dataclass
+Rapprochement), section `rapprochements` du `mapping_pcg.yaml` (seuil,
+poids, mots_vides). Intégration : `main.py` (validation CLI interactive par
+défaut, option `--rapprochements-auto`) et `app.py` (tableau interactif
+avec "Tout valider" / "Tout ignorer", choix ligne par ligne prioritaires).
+Ordre pipeline : parse → load_n1 → MATCHING → build → map_cycles →
+fm_writer. Le cycle/classification du compte N est dérivé à la volée par
+résolution de préfixe PCG (logique de cycle_mapper). Aucune fusion sans
+confirmation explicite. Tests : `tests/test_account_matcher.py`,
+`tests/test_account_matcher_e2e.py`.
 
 **Problème :** Un compte peut changer de numéro entre N-1 et N (ex: "512003" → "5123001"). Actuellement les deux sont traités comme des comptes différents, créant des doublons et faussant les variations.
 

@@ -59,9 +59,87 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--bilan-non-bloquant", action="store_true",
                    help="Le contrôle d'équilibre du bilan (AC-1) devient un "
                         "WARNING au lieu d'être bloquant")
+    p.add_argument("--rapprochements-auto", action="store_true",
+                   help="Applique automatiquement TOUS les rapprochements de "
+                        "comptes N/N-1 proposés (score ≥ seuil), sans "
+                        "validation interactive. Par défaut, chaque "
+                        "rapprochement est validé interactivement.")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Mode verbeux (DEBUG)")
     return p.parse_args()
+
+
+def _valider_rapprochements(
+    propositions: list,
+    rapprochements_auto: bool = False,
+    rapprochements_valides: Optional[list] = None,
+    rapprochements_interactif: bool = False,
+) -> list:
+    """
+    Sélectionne les rapprochements à appliquer parmi les propositions.
+
+    Règle absolue (P6) : AUCUNE fusion sans confirmation explicite. Le
+    seuil de score sert à proposer, jamais à fusionner seul. Les sources
+    de confirmation acceptées, par priorité :
+    1. rapprochements_auto=True   — l'utilisateur a explicitement demandé
+       l'application de toutes les propositions (--rapprochements-auto) ;
+    2. rapprochements_valides     — paires (compte_n1, compte_n) déjà
+       validées en amont (UI Streamlit) ;
+    3. rapprochements_interactif  — validation CLI ligne par ligne via
+       input() (o/n, t = tout valider, a = tout ignorer). Sans TTY,
+       aucune fusion n'est appliquée (avec avertissement).
+    """
+    if rapprochements_auto:
+        logger.info(
+            "Rapprochements : application automatique des %d proposition(s) "
+            "(--rapprochements-auto)", len(propositions),
+        )
+        return list(propositions)
+
+    if rapprochements_valides is not None:
+        paires = {tuple(p) for p in rapprochements_valides}
+        return [r for r in propositions
+                if (r.compte_n1, r.compte_n) in paires]
+
+    if not rapprochements_interactif:
+        logger.warning(
+            "Rapprochements : %d proposition(s) NON appliquée(s) — aucune "
+            "validation fournie (utiliser --rapprochements-auto, la "
+            "validation interactive CLI ou l'interface Streamlit).",
+            len(propositions),
+        )
+        return []
+
+    if not sys.stdin.isatty():
+        logger.warning(
+            "Rapprochements : validation interactive impossible (stdin "
+            "n'est pas un terminal) — %d proposition(s) ignorée(s). "
+            "Utiliser --rapprochements-auto pour les appliquer.",
+            len(propositions),
+        )
+        return []
+
+    valides: list = []
+    tout_valider = False
+    logger.info("Validation interactive de %d rapprochement(s) proposé(s) :",
+                len(propositions))
+    for i, r in enumerate(propositions, start=1):
+        if tout_valider:
+            valides.append(r)
+            continue
+        reponse = input(
+            f"[{i}/{len(propositions)}] Fusionner {r.compte_n1} "
+            f"({r.libelle_n1}) → {r.compte_n} ({r.libelle_n}) — "
+            f"score {r.score:.2f} ? [o/N/t=tout valider/a=tout ignorer] "
+        ).strip().lower()
+        if reponse == "a":
+            break
+        if reponse == "t":
+            tout_valider = True
+            valides.append(r)
+        elif reponse == "o":
+            valides.append(r)
+    return valides
 
 
 def run_pipeline(
@@ -73,22 +151,39 @@ def run_pipeline(
     output_dir: str = "output",
     pcg_config_path: Optional[str] = None,
     bilan_non_bloquant: bool = False,
+    rapprochements_auto: bool = False,
+    rapprochements_valides: Optional[list] = None,
+    rapprochements_interactif: bool = False,
 ) -> dict:
     """
     Exécute le pipeline complet et retourne un dict de résultats.
 
-    Compatible CLI et Streamlit — aucun print(), tout passe par logging.
+    Compatible CLI et Streamlit — aucun print(), tout passe par logging
+    (sauf la validation interactive des rapprochements, qui passe par
+    input() quand rapprochements_interactif=True et stdin est un TTY).
 
     Paramètres notables
     -------------------
     bilan_non_bloquant : bool
         Si True, le contrôle d'équilibre du bilan AC-1 est rétrogradé en
         WARNING : le pipeline continue même si le bilan N est déséquilibré.
+    rapprochements_auto : bool
+        Si True, TOUS les rapprochements de comptes N/N-1 proposés sont
+        appliqués sans validation interactive (confirmation explicite
+        donnée par l'option elle-même).
+    rapprochements_valides : list, optionnel
+        Liste de paires (compte_n1, compte_n) déjà validées par
+        l'utilisateur (UI Streamlit) : seules les propositions
+        correspondantes sont appliquées.
+    rapprochements_interactif : bool
+        Si True (CLI), chaque proposition est validée via input().
+        Sans TTY, aucune fusion n'est appliquée (validation obligatoire).
 
     Retourne
     --------
     dict avec les clés :
         fec_lignes, nb_comptes, controles, balance_mappee, fm_path,
+        rapprochements_proposes, rapprochements_appliques,
         zip_path (optionnel)
     """
     from src.parsers.fec_parser import parse
@@ -151,6 +246,36 @@ def run_pipeline(
 
     if n1_fm:
         balance_n1, mapping_fm = load_balance_n1(n1_fm)
+
+    # --- Rapprochement des comptes N/N-1 (P6) — AVANT build/map_cycles ---
+    propositions = []
+    appliques = []
+    if balance_n1:
+        from src.engine.account_matcher import (
+            appliquer_rapprochements, proposer_rapprochements,
+        )
+        comptes_n = dict(
+            df_fec.groupby("CompteNum")["CompteLib"].first().astype(str)
+        )
+        propositions = proposer_rapprochements(
+            comptes_n, balance_n1, mapping_fm, pcg,
+        )
+        if propositions:
+            appliques = _valider_rapprochements(
+                propositions,
+                rapprochements_auto=rapprochements_auto,
+                rapprochements_valides=rapprochements_valides,
+                rapprochements_interactif=rapprochements_interactif,
+            )
+            balance_n1, mapping_fm = appliquer_rapprochements(
+                balance_n1, appliques, mapping_fm,
+            )
+            logger.info(
+                "Rapprochements : %d proposé(s), %d appliqué(s)",
+                len(propositions), len(appliques),
+            )
+    resultats["rapprochements_proposes"] = propositions
+    resultats["rapprochements_appliques"] = appliques
 
     balance = build(df_fec, balance_n1)
     resultats["nb_comptes"] = len(balance)
@@ -266,6 +391,10 @@ def main() -> None:
             output_dir=args.output,
             pcg_config_path=args.pcg_config,
             bilan_non_bloquant=args.bilan_non_bloquant,
+            rapprochements_auto=args.rapprochements_auto,
+            # Validation interactive par défaut en CLI (sans TTY : aucune
+            # fusion — la confirmation explicite reste obligatoire)
+            rapprochements_interactif=not args.rapprochements_auto,
         )
     except ValueError as exc:
         logger.error("Erreur bloquante : %s", exc)

@@ -159,6 +159,8 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
         "passif_detaille_structure": config.get("passif_detaille_structure") or {},
         # Feuilles FM à insérer dans chaque template (P1)
         "integration_templates": config.get("integration_templates") or {},
+        # Paramètres du rapprochement de comptes N/N-1 (P6)
+        "rapprochements": config.get("rapprochements") or {},
     }
 
 

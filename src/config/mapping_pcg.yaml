@@ -500,6 +500,29 @@ integration_templates:
     position: avant_synthese
 
 # =============================================================================
+# RAPPROCHEMENT DES COMPTES N / N-1 (P6 — account_matcher)
+# =============================================================================
+# Un compte peut changer de numéro entre deux exercices (ex: 512003 →
+# 5123001). Le matcher propose des rapprochements entre comptes orphelins,
+# scorés par préfixe commun, similarité de libellé, cycle et classification
+# bilan. Le seuil sert UNIQUEMENT à proposer : aucune fusion sans
+# confirmation explicite de l'utilisateur (CLI interactive, UI Streamlit
+# ou option --rapprochements-auto).
+rapprochements:
+  # Score minimal pour PROPOSER un rapprochement (jamais pour fusionner seul)
+  seuil: 0.5
+  # Poids des composantes du score composite (somme = 1.0)
+  poids:
+    prefixe: 0.40
+    libelle: 0.35
+    cycle: 0.15
+    classification: 0.10
+  # Mots ignorés dans la comparaison des libellés (insensible à la casse)
+  mots_vides: ["le", "la", "les", "l", "de", "du", "des", "d", "et",
+               "a", "au", "aux", "en", "sur", "un", "une", "pour",
+               "compte", "comptes", "divers", "diverses"]
+
+# =============================================================================
 # LIASSE FISCALE — Mapping des préfixes PCG vers les postes des états
 # financiers (Bilan cerfa 2050/2051, Tréso, AACE, EBIT cerfa 2052,
 # P&L détaillé cerfa 2052/2053).
