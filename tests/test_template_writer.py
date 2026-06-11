@@ -10,6 +10,8 @@ from pathlib import Path
 import openpyxl
 import pytest
 
+from openpyxl import Workbook
+
 from src.parsers.mapping_parser import from_pcg_config
 from src.writers.template_writer import write, _detecter_cycle, _normaliser
 
@@ -20,6 +22,14 @@ OUTPUT_DIR    = Path(__file__).parent.parent / "output" / "test_templates"
 
 CLIENT       = "GILAC"
 DATE_CLOTURE = "31/12/2025"
+
+# Onglets d'un FM complet (fm_writer.write) — FM synthétique pour les tests
+FM_SHEETNAMES = [
+    "Sommaire", "Balance N Vs N-1", "Bilan", "EBIT",
+    "Actif détaillé", "Passif détaillé", "P&L détaillé", "Tréso", "AACE",
+    "C Propres0", "C PRC0", "F0", "I Incorp0", "I Corp0", "I Fi0",
+    "S0", "A0", "V0", "P0", "E0", "T0", "X0",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -32,8 +42,24 @@ def pcg():
 
 
 @pytest.fixture(scope="module")
-def zip_path(pcg) -> Path:
-    return write(TEMPLATES_DIR, CLIENT, DATE_CLOTURE, OUTPUT_DIR, pcg["templates"])
+def fm_path(tmp_path_factory) -> Path:
+    """FM synthétique avec les mêmes noms d'onglets qu'un FM réel."""
+    chemin = tmp_path_factory.mktemp("fm_synthetique") / "FM_GILAC_2025.xlsx"
+    wb = Workbook()
+    wb.remove(wb.active)
+    for nom in FM_SHEETNAMES:
+        ws = wb.create_sheet(nom)
+        ws["B2"] = f"Feuille {nom}"
+        ws["D10"] = 123.456
+    wb.save(chemin)
+    return chemin
+
+
+@pytest.fixture(scope="module")
+def zip_path(pcg, fm_path) -> Path:
+    return write(TEMPLATES_DIR, CLIENT, DATE_CLOTURE, OUTPUT_DIR,
+                 pcg["templates"], fm_path=fm_path,
+                 integration_templates=pcg["integration_templates"])
 
 
 @pytest.fixture(scope="module")
@@ -171,17 +197,20 @@ class TestPlaceholders:
 
 class TestStructure:
 
+    # Comptes d'onglets POST-P1 : feuilles FM insérées dans chaque template
+    # (A : 14 + AACE + A0 = 16 ; V : 18 + V0 = 19 ; S : 13 + S0 = 14)
+
     def test_nb_feuilles_A(self, zip_contents):
         wb = _open_from_zip(zip_contents, "2025_12_GILAC_A_Fournisseurs-Achats.xlsx")
-        assert len(wb.sheetnames) == 14
+        assert len(wb.sheetnames) == 16
 
     def test_nb_feuilles_V(self, zip_contents):
         wb = _open_from_zip(zip_contents, "2025_12_GILAC_V_Clients-Ventes.xlsx")
-        assert len(wb.sheetnames) == 18
+        assert len(wb.sheetnames) == 19
 
     def test_nb_feuilles_S(self, zip_contents):
         wb = _open_from_zip(zip_contents, "2025_12_GILAC_S_Stocks.xlsx")
-        assert len(wb.sheetnames) == 13
+        assert len(wb.sheetnames) == 14
 
     def test_feuille_synth_presente_dans_chaque_template(self, zip_contents):
         for nom, data in zip_contents.items():

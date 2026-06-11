@@ -447,6 +447,59 @@ templates:
   X_Re_sultat: X
 
 # =============================================================================
+# INTÉGRATION DES FEUILLES MAÎTRESSES DANS LES TEMPLATES (P1)
+# =============================================================================
+# Les clés correspondent aux noms de fichiers RÉELS de data/templates/
+# (sans le préfixe 20XX_XX_YYY_ ni l'extension). Arbitrages figés
+# (révision 09/06/2026) :
+#   - I_Immobilisations corp reçoit I Corp0 ET I Incorp0 (confirmé cabinet) ;
+#   - I_Immobilisations incorporelles ne reçoit AUCUNE feuille FM (copie,
+#     renommage et placeholders uniquement) ;
+#   - A_Fournisseurs-Achats reçoit [AACE, A0] ; F_Financement [Tréso, F0].
+# position: avant_synthese → feuilles insérées juste avant la feuille
+# "X Synthèse" du template, dans l'ordre de la liste.
+integration_templates:
+  A_Fournisseurs-Achats:
+    feuilles: [AACE, A0]
+    position: avant_synthese
+  C_Capitaux propres:
+    feuilles: [C Propres0]
+    position: avant_synthese
+  C_Provision pour risques et charges:
+    feuilles: [C PRC0]
+    position: avant_synthese
+  E_Etat:
+    feuilles: [E0]
+    position: avant_synthese
+  F_Financement:
+    feuilles: [Tréso, F0]
+    position: avant_synthese
+  I_Immobilisations corp:
+    feuilles: [I Corp0, I Incorp0]
+    position: avant_synthese
+  I_Immobilisations incorporelles:
+    feuilles: []
+    position: avant_synthese
+  I_Immobilisations financières:
+    feuilles: [I Fi0]
+    position: avant_synthese
+  P_Personnel:
+    feuilles: [P0]
+    position: avant_synthese
+  S_Stocks:
+    feuilles: [S0]
+    position: avant_synthese
+  T_Autres créances - dettes:
+    feuilles: [T0]
+    position: avant_synthese
+  V_Clients-Ventes:
+    feuilles: [V0]
+    position: avant_synthese
+  X_Résultat exceptionnel:
+    feuilles: [X0]
+    position: avant_synthese
+
+# =============================================================================
 # LIASSE FISCALE — Mapping des préfixes PCG vers les postes des états
 # financiers (Bilan cerfa 2050/2051, Tréso, AACE, EBIT cerfa 2052,
 # P&L détaillé cerfa 2052/2053).

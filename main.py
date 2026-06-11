@@ -230,7 +230,8 @@ def run_pipeline(
             date_cloture=date_cloture,
             output_path=output,
             mapping_templates=pcg["templates"],
-            balance_mappee=balance_mappee,
+            fm_path=fm_path,
+            integration_templates=pcg.get("integration_templates"),
         )
         resultats["zip_path"] = zip_path
         logger.info("Feuilles de travail : %s", zip_path)

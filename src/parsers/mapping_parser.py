@@ -157,6 +157,8 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
         # cerfa 2050/2051) — consommées via load_liasse_fiscale
         "actif_detaille_structure":  config.get("actif_detaille_structure") or {},
         "passif_detaille_structure": config.get("passif_detaille_structure") or {},
+        # Feuilles FM à insérer dans chaque template (P1)
+        "integration_templates": config.get("integration_templates") or {},
     }
 
 
