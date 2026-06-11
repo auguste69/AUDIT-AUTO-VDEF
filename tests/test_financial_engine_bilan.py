@@ -217,3 +217,44 @@ def test_filtrer_aace_ne_modifie_pas_la_balance(liasse):
     copie = bal.copy(deep=True)
     filtrer_aace(bal, liasse)
     pd.testing.assert_frame_equal(bal, copie)
+
+
+# ---------------------------------------------------------------------------
+# Corrections audit : chevauchements de préfixes 519/51, 509/50, 512 créditeur
+# ---------------------------------------------------------------------------
+
+def test_bilan_cbc_519_pas_de_double_comptage(liasse):
+    """Un compte 519 (CBC) va aux emprunts SANS être recompté en dispo."""
+    bal = _balance([
+        ("512000", "Banque",  40.0, 30.0),
+        ("519000", "CBC",    -40.0, -30.0),
+    ])
+    bilan = calculer_bilan(bal, liasse)
+    assert bilan.postes["dispo"].as_tuple() == (40.0, 30.0)
+    assert bilan.postes["emprunts"].as_tuple() == (40.0, 30.0)
+    # Équilibre garanti : chaque compte capturé exactement une fois
+    assert bilan.total_actif.as_tuple() == bilan.total_passif.as_tuple()
+
+
+def test_bilan_512_crediteur_reclasse_en_emprunts(liasse):
+    """Une banque créditrice (512 < 0) figure au passif, pas en dispo négative."""
+    bal = _balance([
+        ("512000", "Banque créditrice", -25.0, -10.0),
+        ("411000", "Clients",            25.0,  10.0),
+    ])
+    bilan = calculer_bilan(bal, liasse)
+    assert bilan.postes["dispo"].as_tuple() == (0.0, 0.0)
+    assert bilan.postes["emprunts"].as_tuple() == (25.0, 10.0)
+    assert bilan.total_actif.as_tuple() == bilan.total_passif.as_tuple()
+
+
+def test_bilan_509_pas_de_double_comptage_avec_vmp(liasse):
+    """Un 509 créditeur est reclassé par bascule SANS être recompté en VMP."""
+    bal = _balance([
+        ("503000", "Actions",                       50.0,  40.0),
+        ("509000", "Versements restant à effectuer", -8.0,  -6.0),
+        ("101000", "Capital",                       -42.0, -34.0),
+    ])
+    bilan = calculer_bilan(bal, liasse)
+    assert bilan.postes["vmp"].as_tuple() == (50.0, 40.0)
+    assert bilan.total_actif.as_tuple() == bilan.total_passif.as_tuple()

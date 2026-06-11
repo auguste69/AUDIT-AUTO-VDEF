@@ -23,6 +23,7 @@ from src.engine.financial_engine import (
     calculer_bilan,
     calculer_passif_detaille,
     calculer_pl_detaille,
+    calculer_treso,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,9 +161,9 @@ def run_controles_financiers(
     Retourne
     --------
     list[tuple[str, bool, str, str]]
-        Liste de (nom_controle, ok, detail, severity) — 4 éléments
+        Liste de (nom_controle, ok, detail, severity) — 5 éléments
         (AC-1, cohérence du résultat, cohérence des états détaillés,
-        cohérence du résultat net P&L).
+        cohérence du résultat net P&L, cohérence Tréso).
     """
     resultats: List[ResultatControle] = []
 
@@ -171,6 +172,7 @@ def run_controles_financiers(
         (_ctrl_coherence_resultat, "WARNING"),
         (_ctrl_coherence_actif_detaille, "WARNING"),
         (_ctrl_coherence_pl_resultat, "WARNING"),
+        (_ctrl_coherence_treso, "WARNING"),
     ]
     for controle, severity_erreur in controles:
         try:
@@ -653,3 +655,62 @@ def _ctrl_coherence_pl_resultat(
         )
 
     return (nom, ok, detail, "WARNING")
+
+
+def _ctrl_coherence_treso(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_treso_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence de la Tréso (WARNING, jamais bloquant).
+
+    Vérifie que la trésorerie nette issue de l'approche bilancielle
+    (TN = FRNG − BFR) retombe sur la trésorerie directe (classe 5,
+    partitionnée par signe), avec une tolérance de 1 K€ sur N.
+
+    Un écart signifie que des comptes ne sont capturés par aucune rubrique
+    Tréso (ou par plusieurs) — voir la section liasse_fiscale.treso du
+    mapping_pcg.yaml. L'écart N-1 est signalé dans le détail sans faire
+    échouer le contrôle (données issues du FM historique du client).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_treso_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    treso = calculer_treso(balance_mappee, liasse_config)
+    tn_n, tn_n1 = treso.tn.as_tuple()
+    verif_n, verif_n1 = treso.postes["tn_verif"].as_tuple()
+
+    ecart_n = abs(tn_n - verif_n)
+    ecart_n1 = abs(tn_n1 - verif_n1)
+    ok = bool(ecart_n <= seuil_coherence_treso_ke)
+
+    detail = (
+        f"TN (FRNG − BFR) = {tn_n:,.1f} K€ / trésorerie directe "
+        f"(classe 5) = {verif_n:,.1f} K€ — écart={ecart_n:.3f} K€ "
+        f"(tolérance : {seuil_coherence_treso_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : des comptes ne sont capturés par aucune "
+            "rubrique Tréso (ou par plusieurs) — vérifier la section "
+            "liasse_fiscale.treso du mapping_pcg.yaml."
+        )
+    if ecart_n1 > seuil_coherence_treso_ke:
+        msg_n1 = (
+            f"WARNING N-1 : écart TN/trésorerie directe = {ecart_n1:.3f} K€ "
+            f"(TN={tn_n1:,.1f} K€ / vérification={verif_n1:,.1f} K€) — "
+            f"non bloquant, données issues du FM historique du client."
+        )
+        detail += "\n  " + msg_n1
+        logger.warning("Cohérence Tréso — %s", msg_n1)
+
+    return ("Cohérence Tréso (TN vs trésorerie directe)", ok, detail,
+            "WARNING")

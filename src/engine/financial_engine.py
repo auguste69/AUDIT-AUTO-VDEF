@@ -109,8 +109,9 @@ def calculer_bilan(balance: pd.DataFrame,
     - Actif : valeurs nettes (brut + amort, les amort ayant des Solde_KE négatifs)
     - Passif : × -1 (comptes créditeurs → soldes négatifs → affichage positif)
 
-    Garantie universelle : un poste résiduel catch-all absorbe les comptes
-    non capturés pour assurer l'équilibre avec n'importe quel FEC.
+    Il n'y a PAS de poste résiduel : un compte capturé par aucun préfixe
+    (ou par plusieurs) déséquilibre le bilan — l'écart est loggé ici et
+    contrôlé par AC-1 (controls._ctrl_bilan_equilibre, bloquant sur N).
 
     Paramètres
     ----------
@@ -154,7 +155,12 @@ def calculer_bilan(balance: pd.DataFrame,
     # absents des listes actif/passif — gérés par _classer_comptes_bascule
     autres_crean   = sp(p_actif["autres_creances"])
     vmp            = sp(p_actif["vmp"])
-    dispo          = sp(p_actif["disponibilites"])
+    # Disponibilités : 511/513-518/53 inconditionnels + 512 si débiteur
+    # (512 créditeur = banque créditrice → reclassé en emprunts au passif)
+    dispo_fixe     = sp(p_actif["disponibilites"])
+    dispo_cond     = sp_si(p_actif.get("disponibilites_cond") or [], ">0")
+    dispo          = (round(dispo_fixe[0] + dispo_cond[0], 3),
+                      round(dispo_fixe[1] + dispo_cond[1], 3))
 
     # --- PASSIF (× -1 car comptes créditeurs) ---
     capital        = sp(p_passif["capital"],                  signe=-1)
@@ -167,7 +173,12 @@ def calculer_bilan(balance: pd.DataFrame,
     prov_regl      = sp(p_passif["prov_reglementees"],        signe=-1)
     prov_risques_b = sp(p_passif["prov_risques"],             signe=-1)
     prov_charges_b = sp(p_passif["prov_charges"],             signe=-1)
-    emprunts       = sp(p_passif["emprunts"],                 signe=-1)
+    # Emprunts : 16/17/517/519 inconditionnels + 512 si créditeur
+    emprunts_fixe  = sp(p_passif["emprunts"],                 signe=-1)
+    emprunts_cond  = sp_si(p_passif.get("emprunts_cond") or [], "<0",
+                           signe=-1)
+    emprunts       = (round(emprunts_fixe[0] + emprunts_cond[0], 3),
+                      round(emprunts_fixe[1] + emprunts_cond[1], 3))
     det_fourn_b    = sp(p_passif["dettes_fournisseurs"],      signe=-1)
     det_fisc_b     = sp(p_passif["dettes_fiscales_sociales"], signe=-1)
     autres_dettes  = sp(p_passif["autres_dettes"],            signe=-1)
@@ -263,6 +274,27 @@ def calculer_bilan(balance: pd.DataFrame,
 # Tréso (BFR / FRNG / TN)
 # ---------------------------------------------------------------------------
 
+def _resume_comptes_non_captures_treso(balance: pd.DataFrame,
+                                       treso_config: dict) -> str:
+    """Liste les comptes ne matchant aucun préfixe des rubriques Tréso.
+
+    Sert au diagnostic du contrôle de cohérence TN : un compte hors de
+    toutes les rubriques fausse l'égalité TN = trésorerie directe.
+    """
+    prefixes: set = set()
+    for postes in treso_config.values():
+        for liste in postes.values():
+            prefixes.update(str(p) for p in liste)
+    tous = tuple(prefixes)
+    masque = ~balance["CompteNum"].astype(str).str.startswith(tous)
+    comptes = sorted(balance.loc[masque, "CompteNum"].astype(str))
+    if not comptes:
+        return "aucun"
+    extrait = ", ".join(comptes[:10])
+    suite = f"… (+{len(comptes) - 10})" if len(comptes) > 10 else ""
+    return f"{len(comptes)} compte(s) : {extrait}{suite}"
+
+
 def calculer_treso(balance: pd.DataFrame,
                    liasse_config: dict) -> TresoSynthetique:
     """
@@ -311,10 +343,14 @@ def calculer_treso(balance: pd.DataFrame,
 
     # --- Ressources stables (× -1 car passif/créditeur) ---
     cap_propres  = sp(p_res["capitaux_propres"],       signe=-1)
+    # Résultat de l'exercice en cours (classes 6/7 si non clôturé) :
+    # un bénéfice est une ressource, une perte la diminue.
+    resultat_enc = sp(p_res["resultat_en_cours"],      signe=-1)
     amort_dep    = sp(p_res["amort_dep"],              signe=-1)
     prov_risques = sp(p_res["prov_risques"],           signe=-1)
     dettes_mlt   = sp(p_res["dettes_financieres_mlt"], signe=-1)
-    total_res    = add(cap_propres, amort_dep, prov_risques, dettes_mlt)
+    total_res    = add(cap_propres, resultat_enc, amort_dep, prov_risques,
+                       dettes_mlt)
 
     # --- Emplois stables (positif car actif/débiteur) ---
     actif_immo = sp(p_emp["actif_immobilise_brut"])
@@ -324,18 +360,18 @@ def calculer_treso(balance: pd.DataFrame,
     frng = (round(total_res[0] - total_emp[0], 3),
             round(total_res[1] - total_emp[1], 3))
 
-    # --- Actif circulant d'exploitation ---
+    # --- Actif circulant d'exploitation (comptes débiteurs uniquement) ---
     stocks       = sp(p_ac["stocks"])
-    crean_cli    = sp(p_ac["creances_clients"])
-    autres_crean = sp_si(p_ac["autres_creances"], ">0")
-    cca          = sp(p_ac["cca"])
+    crean_cli    = sp_si(p_ac["creances_clients"], ">0")
+    autres_crean = sp_si(p_ac["autres_creances"],  ">0")
+    cca          = sp_si(p_ac["cca"],              ">0")
     total_ac     = add(stocks, crean_cli, autres_crean, cca)
 
-    # --- Passif circulant d'exploitation (× -1 pour affichage positif) ---
-    det_fourn  = sp(p_pc["dettes_fournisseurs"], signe=-1)
+    # --- Passif circulant d'exploitation (comptes créditeurs, × -1) ---
+    det_fourn  = sp_si(p_pc["dettes_fournisseurs"],      "<0", signe=-1)
     det_fisc   = sp_si(p_pc["dettes_fiscales_sociales"], "<0", signe=-1)
     autres_det = sp_si(p_pc["autres_dettes"],            "<0", signe=-1)
-    pca        = sp(p_pc["pca"], signe=-1)
+    pca        = sp_si(p_pc["pca"],                      "<0", signe=-1)
     total_pc   = add(det_fourn, det_fisc, autres_det, pca)
 
     # --- BFR ---
@@ -346,27 +382,30 @@ def calculer_treso(balance: pd.DataFrame,
     tn = (round(frng[0] - bfr[0], 3),
           round(frng[1] - bfr[1], 3))
 
-    # --- Vérification TN (trésorerie directe) ---
-    treso_active   = sp_si(p_treso["tresorerie_active"], ">0")
-    treso_pass_519 = sp(p_treso["tresorerie_passive_519"], signe=-1)
-    treso_pass_512 = sp_si(p_treso["tresorerie_passive_512"], "<0", signe=-1)
-    treso_passive  = (round(treso_pass_519[0] + treso_pass_512[0], 3),
-                      round(treso_pass_519[1] + treso_pass_512[1], 3))
+    # --- Vérification TN (trésorerie directe : classe 5 par signe) ---
+    treso_active  = sp_si(p_treso["tresorerie_active"],  ">0")
+    treso_passive = sp_si(p_treso["tresorerie_passive"], "<0", signe=-1)
     tn_verif = (round(treso_active[0] - treso_passive[0], 3),
                 round(treso_active[1] - treso_passive[1], 3))
 
-    # Contrôle cohérence fondamentale FRNG = BFR + TN
+    # Contrôle de cohérence : la TN issue de FRNG − BFR doit retomber sur
+    # la trésorerie directe (classe 5). Un écart signifie que des comptes
+    # ne sont capturés par aucune rubrique (ou par plusieurs).
     for annee_lbl, idx in [("N", 0), ("N-1", 1)]:
-        ecart = abs(frng[idx] - (bfr[idx] + tn[idx]))
-        if ecart > 0.01:
+        ecart = abs(tn[idx] - tn_verif[idx])
+        if ecart > 0.5:
             logger.warning(
-                "Tréso : FRNG ≠ BFR + TN en %s "
-                "(FRNG=%.1f, BFR=%.1f, TN=%.1f, écart=%.3f K€)",
-                annee_lbl, frng[idx], bfr[idx], tn[idx], ecart,
+                "Tréso : TN (FRNG − BFR) ≠ trésorerie directe en %s "
+                "(TN=%.1f, vérification=%.1f, écart=%.3f K€) — comptes non "
+                "capturés : %s",
+                annee_lbl, tn[idx], tn_verif[idx], ecart,
+                _resume_comptes_non_captures_treso(balance,
+                                                   liasse_config["treso"]),
             )
 
     valeurs: dict = dict(
-        cap_propres=cap_propres, amort_dep=amort_dep,
+        cap_propres=cap_propres, resultat_enc=resultat_enc,
+        amort_dep=amort_dep,
         prov_risques=prov_risques, dettes_mlt=dettes_mlt, total_res=total_res,
         actif_immo=actif_immo, total_emp=total_emp,
         stocks=stocks, crean_cli=crean_cli, autres_crean=autres_crean,

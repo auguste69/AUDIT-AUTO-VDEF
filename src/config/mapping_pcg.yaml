@@ -542,14 +542,21 @@ liasse_fiscale:
                   "281", "291"]
       immo_fi: ["261", "266", "267", "268", "271", "272", "273", "274",
                 "275", "276", "277", "296", "297"]
-      stocks: ["31", "32", "33", "34", "35", "37", "39"]
+      # Toute la classe 3 (stocks bruts 30-38 + dépréciations 39, en net)
+      stocks: ["3"]
       avances_acomptes_verses: ["4091"]
       creances_clients: ["411", "413", "416", "418", "491"]
       # 425, 444, 451, 455, 456, 467, 478 retirés — gérés par comptes_bascule
       autres_creances: ["4096", "4097", "4098", "441", "4456", "462",
                         "465", "471"]
-      vmp: ["50", "590"]
-      disponibilites: ["51", "53"]
+      # 501-508 énumérés (PAS "50") : 509 est un compte bascule — le
+      # préfixe "50" le compterait une seconde fois. "59" = dépréciations.
+      vmp: ["501", "502", "503", "504", "505", "506", "507", "508", "59"]
+      # 51x énumérés (PAS "51") : 517 et 519 sont au passif (emprunts),
+      # 512 est conditionnel (créditeur → emprunts). ">0" appliqué au 512
+      # via disponibilites_cond dans le code.
+      disponibilites: ["511", "513", "514", "515", "516", "518", "53"]
+      disponibilites_cond: ["512"]
       # CCA (486) géré dynamiquement par comptes_bascule — liste vide voulue
       cca: []
     passif:
@@ -565,7 +572,11 @@ liasse_fiscale:
       prov_reglementees: ["14"]
       prov_risques: ["151"]
       prov_charges: ["152", "153", "154", "155", "156", "157", "158"]
-      emprunts: ["16", "17", "519"]
+      # 517 (autres organismes) et 519 (CBC) au passif par convention
+      # cerfa 2051 ; 512 créditeur reclassé ici via emprunts_cond ("<0"
+      # appliqué dans le code).
+      emprunts: ["16", "17", "517", "519"]
+      emprunts_cond: ["512"]
       dettes_fournisseurs: ["401", "403", "4081", "4088"]
       # 444 retiré (double-comptage) — géré par comptes_bascule
       dettes_fiscales_sociales: ["421", "422", "423", "424", "427", "428",
@@ -584,33 +595,48 @@ liasse_fiscale:
       # filtré ">0" côté actif et "<0" côté passif dans le code)
       interco: ["451", "455"]
 
+  # La cohérence TN = FRNG − BFR = trésorerie directe exige que CHAQUE
+  # compte hors trésorerie soit capturé par exactement UNE rubrique.
+  # Principe : classes 1-3 et 6-7 en inconditionnel, classe 4 partitionnée
+  # par le signe du solde (">0" actif circulant / "<0" passif circulant,
+  # conditions appliquées dans le code), classe 5 = trésorerie directe.
+  # Le contrôle "Cohérence Tréso" (controls.py) vérifie |TN − TN direct|.
   treso:
     ressources_stables:
       capitaux_propres: ["10", "11", "12", "13", "14"]
+      # Résultat de l'exercice en cours (classes 6 et 7 si non clôturé) :
+      # sans lui, le FRNG est faux de tout le résultat de l'exercice.
+      resultat_en_cours: ["6", "7"]
       amort_dep: ["28", "29", "39", "49"]
       prov_risques: ["15"]
       dettes_financieres_mlt: ["16", "17"]
     emplois_stables:
       actif_immobilise_brut: ["20", "21", "22", "23", "24", "25", "26", "27"]
     actif_circulant_exploitation:
-      stocks: ["31", "32", "33", "34", "35", "37"]
-      creances_clients: ["411", "413", "416", "418"]
-      # Condition ">0" appliquée dans le code
-      autres_creances: ["40", "44", "46", "47"]
-      cca: ["486"]
+      stocks: ["30", "31", "32", "33", "34", "35", "36", "37", "38"]
+      # Condition ">0" appliquée dans le code (419 créditeur → passif)
+      creances_clients: ["41"]
+      # Condition ">0" — fournisseurs débiteurs (40), créances sociales et
+      # fiscales (42-44), c/c associés débiteurs (45), divers (46-47)
+      autres_creances: ["40", "42", "43", "44", "45", "46", "47"]
+      # Condition ">0" — comptes de régularisation actif (CCA 486 inclus)
+      cca: ["48"]
     passif_circulant_exploitation:
-      dettes_fournisseurs: ["401", "403", "408"]
+      # Condition "<0" appliquée dans le code (fournisseurs débiteurs → actif)
+      dettes_fournisseurs: ["40"]
       # Condition "<0" appliquée dans le code
       dettes_fiscales_sociales: ["42", "43", "44"]
-      # Condition "<0" appliquée dans le code
-      autres_dettes: ["46", "47"]
-      pca: ["487"]
+      # Condition "<0" — clients créditeurs (419), c/c associés créditeurs
+      # (45), divers (46-47)
+      autres_dettes: ["41", "45", "46", "47"]
+      # Condition "<0" — comptes de régularisation passif (PCA 487 inclus)
+      pca: ["48"]
     tresorerie_directe:
-      # Condition ">0" appliquée dans le code
-      tresorerie_active: ["50", "51", "53"]
-      tresorerie_passive_519: ["519"]
-      # Condition "<0" appliquée dans le code
-      tresorerie_passive_512: ["512"]
+      # Toute la classe 5, partitionnée par le signe du solde dans le code :
+      # ">0" → trésorerie active (banques, caisse, VMP), "<0" → trésorerie
+      # passive (CBC 519, banques créditrices 512, dépréciations 59)
+      tresorerie_active: ["5"]
+      tresorerie_passive: ["5"]
 
   aace:
     prefixes: ["606", "607", "608", "609", "61", "62"]
@@ -798,6 +824,10 @@ actif_detaille_structure:
            libelle: "Produits intermédiaires et finis",
            prefixes: ["35", "395"]}
         - {cle: marchandises, libelle: "Marchandises", prefixes: ["37", "397"]}
+        # Complète la partition de la classe 3 ("3" au bilan synthétique) :
+        # 30/36/38 non standard PCG mais rencontrés, 390/396/398/399 dép.
+        - {cle: autres_stocks, libelle: "Autres stocks et en-cours",
+           prefixes: ["30", "36", "38", "390", "396", "398", "399"]}
     - cle: avances_acomptes
       sous_total: null
       postes:
@@ -827,11 +857,17 @@ actif_detaille_structure:
     - cle: tresorerie
       sous_total: "Trésorerie"
       postes:
-        # 509 (versements restant à effectuer) suit la convention du bilan
-        # synthétique : inclus dans "50" + reclassé par bascule si > 0
+        # 501-508 énumérés (PAS "50") : 509 est un compte bascule, repris
+        # ici uniquement s'il est débiteur (cohérence bilan synthétique)
         - {cle: vmp, libelle: "Valeurs mobilières de placement",
-           prefixes: ["50", "590"], prefixes_cond: ["509"], condition: ">0"}
-        - {cle: disponibilites, libelle: "Disponibilités", prefixes: ["51", "53"]}
+           prefixes: ["501", "502", "503", "504", "505", "506", "507",
+                      "508", "59"],
+           prefixes_cond: ["509"], condition: ">0"}
+        # 51x énumérés (PAS "51") : 517/519 au passif, 512 créditeur
+        # reclassé en emprunts (cohérence bilan synthétique)
+        - {cle: disponibilites, libelle: "Disponibilités",
+           prefixes: ["511", "513", "514", "515", "516", "518", "53"],
+           prefixes_cond: ["512"], condition: ">0"}
     - cle: regularisation
       sous_total: "Comptes de régularisation"
       postes:
@@ -885,7 +921,8 @@ passif_detaille_structure:
       sous_total: "Dettes"
       postes:
         - {cle: emprunts, libelle: "Emprunts et dettes financières",
-           prefixes: ["16", "17", "519"]}
+           prefixes: ["16", "17", "517", "519"],
+           prefixes_cond: ["512"], condition: "<0"}
         - {cle: avances_recues,
            libelle: "Avances et acomptes reçus sur commandes en cours",
            prefixes: ["4191"]}

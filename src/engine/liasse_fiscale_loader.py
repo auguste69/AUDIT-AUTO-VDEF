@@ -27,21 +27,22 @@ _CLES_REQUISES: Dict[str, Dict[str, List[str]]] = {
             "capital_souscrit_non_appele", "immo_incorp", "immo_corp",
             "immo_fi", "stocks", "avances_acomptes_verses",
             "creances_clients", "autres_creances", "vmp",
-            "disponibilites", "cca",
+            "disponibilites", "disponibilites_cond", "cca",
         ],
         "passif": [
             "capital", "primes", "reserve_legale", "autres_reserves",
             "report_nouveau", "resultat_exercice", "resultat_en_cours",
             "subventions", "prov_reglementees", "prov_risques",
-            "prov_charges", "emprunts", "dettes_fournisseurs",
+            "prov_charges", "emprunts", "emprunts_cond",
+            "dettes_fournisseurs",
             "dettes_fiscales_sociales", "autres_dettes", "pca",
         ],
         "comptes_bascule": ["prefixes", "interco"],
     },
     "treso": {
         "ressources_stables": [
-            "capitaux_propres", "amort_dep", "prov_risques",
-            "dettes_financieres_mlt",
+            "capitaux_propres", "resultat_en_cours", "amort_dep",
+            "prov_risques", "dettes_financieres_mlt",
         ],
         "emplois_stables": ["actif_immobilise_brut"],
         "actif_circulant_exploitation": [
@@ -52,8 +53,7 @@ _CLES_REQUISES: Dict[str, Dict[str, List[str]]] = {
             "autres_dettes", "pca",
         ],
         "tresorerie_directe": [
-            "tresorerie_active", "tresorerie_passive_519",
-            "tresorerie_passive_512",
+            "tresorerie_active", "tresorerie_passive",
         ],
     },
     "aace": {"prefixes": []},
