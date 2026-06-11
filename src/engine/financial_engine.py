@@ -20,9 +20,14 @@ from typing import List, Tuple
 import pandas as pd
 
 from src.models.financial_statements import (
+    ActifDetaille,
     BilanSynthetique,
     EbitSynthetique,
+    LigneDetail,
+    PassifDetaille,
+    PlDetaille,
     PosteComptable,
+    SectionDetail,
     TresoSynthetique,
 )
 
@@ -504,6 +509,305 @@ def calculer_ebit(balance: pd.DataFrame,
         total_charges=PosteComptable("total_charges", total_charges[0],
                                      total_charges[1]),
         ebit=PosteComptable("ebit", ebit[0], ebit[1]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# États détaillés (Actif détaillé / Passif détaillé — cerfa 2050 / 2051)
+# ---------------------------------------------------------------------------
+
+def _sommer_poste_structure(balance: pd.DataFrame, poste: dict,
+                            colonne: str) -> float:
+    """Somme un poste d'état détaillé : prefixes + prefixes_cond filtrés.
+
+    Le poste peut combiner une composante inconditionnelle ("prefixes") et
+    une composante conditionnée sur le signe du solde ("prefixes_cond" +
+    "condition" ">0"/"<0") — reflet des comptes bascule du bilan synthétique.
+    """
+    total = 0.0
+    prefixes = [str(p) for p in (poste.get("prefixes") or [])]
+    if prefixes:
+        total += _sommer_prefixes(balance, prefixes, colonne)
+    prefixes_cond = [str(p) for p in (poste.get("prefixes_cond") or [])]
+    if prefixes_cond:
+        condition = poste.get("condition")
+        if condition not in (">0", "<0"):
+            raise ValueError(
+                f"État détaillé : poste '{poste.get('cle')}' porte des "
+                f"prefixes_cond sans condition valide (attendu '>0' ou "
+                f"'<0', trouvé {condition!r})."
+            )
+        total += _sommer_prefixes_si(balance, prefixes_cond, colonne, condition)
+    return total
+
+
+def _calculer_etat_detaille(balance: pd.DataFrame, structure: dict,
+                            signe: int, nom_etat: str) -> tuple:
+    """Calcule un état détaillé (sections, agrégats, total) depuis sa structure.
+
+    Paramètres
+    ----------
+    balance : pd.DataFrame
+        Balance avec colonnes CompteNum, Solde_KE, Solde_N1_KE.
+    structure : dict
+        Structure de présentation (actif_detaille_structure ou
+        passif_detaille_structure du mapping_pcg.yaml).
+    signe : int
+        +1 (actif) ou -1 (passif, comptes créditeurs affichés en positif).
+    nom_etat : str
+        Nom de l'état pour les messages d'erreur ("Actif détaillé", …).
+
+    Retourne
+    --------
+    tuple (sections, agregats, total)
+        Listes de SectionDetail / LigneDetail et LigneDetail total.
+    """
+    if not structure or not structure.get("sections"):
+        raise ValueError(
+            f"{nom_etat} : structure absente ou sans sections — vérifier la "
+            f"section correspondante de mapping_pcg.yaml."
+        )
+
+    sections: List[SectionDetail] = []
+    for sec in structure["sections"]:
+        postes: List[LigneDetail] = []
+        for p in sec.get("postes") or []:
+            valeur_n = round(
+                _sommer_poste_structure(balance, p, "Solde_KE") * signe, 3)
+            valeur_n1 = round(
+                _sommer_poste_structure(balance, p, "Solde_N1_KE") * signe, 3)
+            postes.append(LigneDetail(p["cle"], p["libelle"],
+                                      valeur_n, valeur_n1))
+        libelle_st = sec.get("sous_total")
+        sous_total = None
+        if libelle_st:
+            sous_total = LigneDetail(
+                sec["cle"], libelle_st,
+                round(sum(p.valeur_n for p in postes), 3),
+                round(sum(p.valeur_n1 for p in postes), 3),
+            )
+        sections.append(SectionDetail(sec["cle"], libelle_st, postes,
+                                      sous_total))
+
+    par_cle = {s.cle: s for s in sections}
+
+    def _somme_sections(cles: list) -> Tuple[float, float]:
+        inconnues = [c for c in cles if c not in par_cle]
+        if inconnues:
+            raise ValueError(
+                f"{nom_etat} : agrégat référençant des sections inconnues "
+                f"{inconnues} — sections disponibles : {sorted(par_cle)}."
+            )
+        return (
+            round(sum(p.valeur_n for c in cles
+                      for p in par_cle[c].postes), 3),
+            round(sum(p.valeur_n1 for c in cles
+                      for p in par_cle[c].postes), 3),
+        )
+
+    agregats: List[LigneDetail] = []
+    for ag in structure.get("agregats") or []:
+        valeur_n, valeur_n1 = _somme_sections(ag["sections"])
+        agregats.append(LigneDetail(ag["cle"], ag["libelle"],
+                                    valeur_n, valeur_n1,
+                                    apres_section=ag.get("apres_section")))
+
+    total_n, total_n1 = _somme_sections([s.cle for s in sections])
+    libelle_total = (structure.get("total") or {}).get("libelle", "TOTAL")
+    total = LigneDetail("total", libelle_total, total_n, total_n1)
+
+    logger.info("%s : total N=%.1f K€, N-1=%.1f K€", nom_etat, total_n,
+                total_n1)
+    return sections, agregats, total
+
+
+def calculer_actif_detaille(balance: pd.DataFrame,
+                            liasse_config: dict) -> ActifDetaille:
+    """Calcule l'Actif détaillé (cerfa 2050) pour N et N-1.
+
+    La structure de présentation provient de
+    liasse_config["actif_detaille_structure"] (racine du mapping_pcg.yaml,
+    exposée par load_liasse_fiscale). Les partitions reprennent exactement
+    les listes du bilan synthétique raffinées par sous-poste : le total est
+    strictement égal au Total Actif du bilan.
+
+    Paramètres
+    ----------
+    balance : pd.DataFrame
+        Balance avec colonnes CompteNum, Solde_KE, Solde_N1_KE.
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+
+    Retourne
+    --------
+    ActifDetaille
+        Sections, agrégats et total (valeurs N et N-1 en K€).
+    """
+    sections, agregats, total = _calculer_etat_detaille(
+        balance, liasse_config.get("actif_detaille_structure"),
+        signe=1, nom_etat="Actif détaillé",
+    )
+    return ActifDetaille(sections=sections, agregats=agregats, total=total)
+
+
+def calculer_passif_detaille(balance: pd.DataFrame,
+                             liasse_config: dict) -> PassifDetaille:
+    """Calcule le Passif détaillé (cerfa 2051) pour N et N-1.
+
+    Même principe que calculer_actif_detaille, avec signe -1 (comptes
+    créditeurs affichés en positif). Le total est strictement égal au
+    Total Passif du bilan synthétique.
+
+    Paramètres
+    ----------
+    balance : pd.DataFrame
+        Balance avec colonnes CompteNum, Solde_KE, Solde_N1_KE.
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+
+    Retourne
+    --------
+    PassifDetaille
+        Sections, agrégats et total (valeurs N et N-1 en K€).
+    """
+    sections, agregats, total = _calculer_etat_detaille(
+        balance, liasse_config.get("passif_detaille_structure"),
+        signe=-1, nom_etat="Passif détaillé",
+    )
+    return PassifDetaille(sections=sections, agregats=agregats, total=total)
+
+
+# ---------------------------------------------------------------------------
+# P&L détaillé (cerfa 2052 / 2053)
+# ---------------------------------------------------------------------------
+
+# Postes hors exploitation, clés obligatoires de liasse_fiscale.pl_detaille
+_POSTES_PL: List[str] = [
+    "produits_financiers", "charges_financieres",
+    "produits_exceptionnels", "charges_exceptionnelles",
+    "participation_salaries", "impots_benefices", "quotes_parts",
+]
+
+
+def calculer_pl_detaille(balance: pd.DataFrame,
+                         liasse_config: dict) -> PlDetaille:
+    """Calcule le compte de résultat détaillé (cerfa 2052/2053) pour N et N-1.
+
+    Les postes hors exploitation proviennent de
+    liasse_config["pl_detaille"]. La partie exploitation est calculée en
+    RÉSIDUEL : produits d'exploitation = −(classe 7) − postes hors
+    exploitation de classe 7, idem pour les charges (classe 6). Le résultat
+    net est donc strictement égal à −(somme des classes 6 et 7), quel que
+    soit le plan de comptes du client.
+
+    Convention de signe : tous les postes valent −solde (produits positifs,
+    charges négatives) ; les résultats sont des sommes algébriques.
+
+    Paramètres
+    ----------
+    balance : pd.DataFrame
+        Balance avec colonnes CompteNum, Solde_KE, Solde_N1_KE.
+    liasse_config : dict
+        Dict contenant les clés "ebit" et "pl_detaille" (sections
+        liasse_fiscale du YAML).
+
+    Retourne
+    --------
+    PlDetaille
+        Détail exploitation (EBIT) + postes hors exploitation + résultats.
+
+    Lève
+    ----
+    ValueError
+        Si la section pl_detaille (ou une clé obligatoire) est absente.
+    """
+    pl_cfg = liasse_config.get("pl_detaille") or {}
+    manquantes = [cle for cle in _POSTES_PL if cle not in pl_cfg]
+    if manquantes:
+        raise ValueError(
+            f"liasse_fiscale.pl_detaille : clé(s) obligatoire(s) "
+            f"{manquantes} absente(s) — vérifier mapping_pcg.yaml."
+        )
+
+    ebit = calculer_ebit(balance, liasse_config)
+
+    def sneg(prefixes: list, colonne: str) -> float:
+        """−(somme des soldes) : produits positifs, charges négatives."""
+        prefixes = [str(p) for p in prefixes]
+        return -_sommer_prefixes(balance, prefixes, colonne) if prefixes else 0.0
+
+    postes = {
+        cle: (round(sneg(pl_cfg[cle], "Solde_KE"), 3),
+              round(sneg(pl_cfg[cle], "Solde_N1_KE"), 3))
+        for cle in _POSTES_PL
+    }
+
+    def _exploitation(colonne: str) -> Tuple[float, float]:
+        """Produits et charges d'exploitation en résiduel des classes 7 / 6."""
+        produits = -_sommer_prefixes(balance, ["7"], colonne)
+        charges = -_sommer_prefixes(balance, ["6"], colonne)
+        for cle in _POSTES_PL:
+            for prefixe in pl_cfg[cle]:
+                prefixe = str(prefixe)
+                valeur = -_sommer_prefixes(balance, [prefixe], colonne)
+                if prefixe.startswith("7"):
+                    produits -= valeur
+                else:
+                    charges -= valeur
+        return round(produits, 3), round(charges, 3)
+
+    prod_n, chrg_n = _exploitation("Solde_KE")
+    prod_n1, chrg_n1 = _exploitation("Solde_N1_KE")
+    postes["produits_exploitation"] = (prod_n, prod_n1)
+    postes["charges_exploitation"] = (chrg_n, chrg_n1)
+
+    # Résiduels vs EBIT synthétique : comptes d'exploitation non capturés
+    # par les postes EBIT (ex. frais accessoires d'achats par convention
+    # cabinet) — affichés en lignes "divers" dans le writer.
+    postes["produits_expl_divers"] = (
+        round(prod_n - ebit.total_produits.valeur_n, 3),
+        round(prod_n1 - ebit.total_produits.valeur_n1, 3),
+    )
+    postes["charges_expl_divers"] = (
+        round(chrg_n + ebit.total_charges.valeur_n, 3),
+        round(chrg_n1 + ebit.total_charges.valeur_n1, 3),
+    )
+
+    def add(*cles: str) -> Tuple[float, float]:
+        return (round(sum(postes[c][0] for c in cles), 3),
+                round(sum(postes[c][1] for c in cles), 3))
+
+    r_expl = add("produits_exploitation", "charges_exploitation")
+    r_fin = add("produits_financiers", "charges_financieres")
+    r_courant = (round(r_expl[0] + postes["quotes_parts"][0] + r_fin[0], 3),
+                 round(r_expl[1] + postes["quotes_parts"][1] + r_fin[1], 3))
+    r_exc = add("produits_exceptionnels", "charges_exceptionnelles")
+    r_net = (
+        round(r_courant[0] + r_exc[0] + postes["participation_salaries"][0]
+              + postes["impots_benefices"][0], 3),
+        round(r_courant[1] + r_exc[1] + postes["participation_salaries"][1]
+              + postes["impots_benefices"][1], 3),
+    )
+
+    logger.info(
+        "P&L détaillé : résultat exploitation N=%.1f, financier N=%.1f, "
+        "exceptionnel N=%.1f, net N=%.1f K€",
+        r_expl[0], r_fin[0], r_exc[0], r_net[0],
+    )
+
+    return PlDetaille(
+        ebit=ebit,
+        postes={cle: PosteComptable(cle, v[0], v[1])
+                for cle, v in postes.items()},
+        resultat_exploitation=PosteComptable("resultat_exploitation",
+                                             r_expl[0], r_expl[1]),
+        resultat_financier=PosteComptable("resultat_financier",
+                                          r_fin[0], r_fin[1]),
+        resultat_courant=PosteComptable("resultat_courant",
+                                        r_courant[0], r_courant[1]),
+        resultat_exceptionnel=PosteComptable("resultat_exceptionnel",
+                                             r_exc[0], r_exc[1]),
+        resultat_net=PosteComptable("resultat_net", r_net[0], r_net[1]),
     )
 
 

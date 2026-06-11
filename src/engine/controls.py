@@ -18,7 +18,12 @@ from typing import List, Optional, Tuple
 import pandas as pd
 
 # Import engine → engine uniquement (jamais src/writers/)
-from src.engine.financial_engine import calculer_bilan
+from src.engine.financial_engine import (
+    calculer_actif_detaille,
+    calculer_bilan,
+    calculer_passif_detaille,
+    calculer_pl_detaille,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +54,10 @@ def run_all(
     """
     Exécute tous les contrôles d'intégrité sur le FEC.
 
-    Si balance_mappee ET liasse_config sont fournis, deux contrôles
-    financiers supplémentaires sont exécutés (équilibre du bilan AC-1 et
-    cohérence du résultat). Sinon, seuls les 9 contrôles FEC historiques
+    Si balance_mappee ET liasse_config sont fournis, les contrôles
+    financiers supplémentaires sont exécutés (équilibre du bilan AC-1,
+    cohérence du résultat, cohérence des états détaillés, cohérence du
+    résultat net P&L). Sinon, seuls les 9 contrôles FEC historiques
     sont exécutés (rétrocompatibilité totale).
 
     Paramètres
@@ -154,13 +160,17 @@ def run_controles_financiers(
     Retourne
     --------
     list[tuple[str, bool, str, str]]
-        Liste de (nom_controle, ok, detail, severity) — 2 éléments.
+        Liste de (nom_controle, ok, detail, severity) — 4 éléments
+        (AC-1, cohérence du résultat, cohérence des états détaillés,
+        cohérence du résultat net P&L).
     """
     resultats: List[ResultatControle] = []
 
     controles = [
         (_ctrl_bilan_equilibre, "WARNING" if bilan_non_bloquant else "BLOQUANT"),
         (_ctrl_coherence_resultat, "WARNING"),
+        (_ctrl_coherence_actif_detaille, "WARNING"),
+        (_ctrl_coherence_pl_resultat, "WARNING"),
     ]
     for controle, severity_erreur in controles:
         try:
@@ -518,3 +528,128 @@ def _ctrl_coherence_resultat(
         )
 
     return ("Cohérence du résultat", ok, detail, "WARNING")
+
+
+def _ctrl_coherence_actif_detaille(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_detaille_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence des états détaillés (WARNING, jamais bloquant).
+
+    Vérifie que les totaux de l'Actif détaillé et du Passif détaillé
+    (cerfa 2050/2051) coïncident avec les totaux du bilan synthétique,
+    avec une tolérance de 1 K€ : un écart signale une partition incomplète
+    des structures actif/passif détaillés du mapping_pcg.yaml.
+
+    Si les structures sont absentes de la config (YAML antérieur au
+    prompt 10), le contrôle est marqué non exécuté (INFO, ok=True).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_detaille_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    nom = "Cohérence des états détaillés"
+    if not (liasse_config.get("actif_detaille_structure") or {}).get("sections") \
+            or not (liasse_config.get("passif_detaille_structure") or {}).get("sections"):
+        return (
+            nom, True,
+            "Contrôle non exécuté : structures actif/passif détaillés "
+            "absentes de la config PCG (mapping_pcg.yaml).",
+            "INFO",
+        )
+
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    actif = calculer_actif_detaille(balance_mappee, liasse_config)
+    passif = calculer_passif_detaille(balance_mappee, liasse_config)
+
+    ecart_actif = abs(actif.total.valeur_n - bilan.total_actif.valeur_n)
+    ecart_passif = abs(passif.total.valeur_n - bilan.total_passif.valeur_n)
+    ok = bool(ecart_actif <= seuil_coherence_detaille_ke
+              and ecart_passif <= seuil_coherence_detaille_ke)
+
+    detail = (
+        f"Actif détaillé N = {actif.total.valeur_n:,.1f} K€ / bilan = "
+        f"{bilan.total_actif.valeur_n:,.1f} K€ (écart={ecart_actif:.3f} K€) — "
+        f"Passif détaillé N = {passif.total.valeur_n:,.1f} K€ / bilan = "
+        f"{bilan.total_passif.valeur_n:,.1f} K€ (écart={ecart_passif:.3f} K€) "
+        f"— tolérance : {seuil_coherence_detaille_ke:.1f} K€"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : la partition des états détaillés ne couvre pas "
+            "les mêmes comptes que le bilan synthétique (vérifier "
+            "actif_detaille_structure / passif_detaille_structure dans "
+            "mapping_pcg.yaml)."
+        )
+
+    return (nom, ok, detail, "WARNING")
+
+
+def _ctrl_coherence_pl_resultat(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_resultat_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence du résultat net P&L (WARNING, jamais bloquant).
+
+    Vérifie que le résultat net du P&L détaillé (cerfa 2052/2053) coïncide
+    avec le poste résultat du bilan (comptes 12x + résultat en cours
+    classes 6/7), avec une tolérance de 1 K€.
+
+    Si les sections ebit/pl_detaille sont absentes de la config (YAML
+    antérieur aux prompts 9-10), le contrôle est marqué non exécuté
+    (INFO, ok=True).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_resultat_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    nom = "Cohérence du résultat net (P&L)"
+    if not liasse_config.get("ebit") or not liasse_config.get("pl_detaille"):
+        return (
+            nom, True,
+            "Contrôle non exécuté : sections ebit/pl_detaille absentes de "
+            "la config PCG (mapping_pcg.yaml).",
+            "INFO",
+        )
+
+    pl = calculer_pl_detaille(balance_mappee, liasse_config)
+
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    resultat_bilan = (
+        bilan.postes["resultat"].valeur_n
+        + bilan.postes["resultat_encours"].valeur_n
+    )
+
+    ecart = abs(pl.resultat_net.valeur_n - resultat_bilan)
+    ok = bool(ecart <= seuil_coherence_resultat_ke)
+
+    detail = (
+        f"Résultat net du P&L détaillé = {pl.resultat_net.valeur_n:,.1f} K€ / "
+        f"poste résultat du bilan (12x + résultat en cours) = "
+        f"{resultat_bilan:,.1f} K€ — écart={ecart:.3f} K€ "
+        f"(tolérance : {seuil_coherence_resultat_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : le résultat net du compte de résultat ne "
+            "correspond pas au résultat porté au bilan (résultat déjà "
+            "affecté en 12x ou mapping incomplet)."
+        )
+
+    return (nom, ok, detail, "WARNING")

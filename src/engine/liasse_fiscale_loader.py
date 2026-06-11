@@ -138,6 +138,19 @@ def load_liasse_fiscale(pcg_config: dict) -> dict:
                     contenu[cle], f"{section}.{cle}"
                 )
 
+    # Pass-through des sections non validées ici : ebit et pl_detaille
+    # (validation déléguée à financial_engine.calculer_ebit /
+    # calculer_pl_detaille) et structures de présentation des états
+    # détaillés (racine du YAML, exposées par from_pcg_config).
+    resultat["ebit"] = liasse.get("ebit") or {}
+    resultat["pl_detaille"] = liasse.get("pl_detaille") or {}
+    resultat["actif_detaille_structure"] = (
+        pcg_config.get("actif_detaille_structure") or {}
+    )
+    resultat["passif_detaille_structure"] = (
+        pcg_config.get("passif_detaille_structure") or {}
+    )
+
     logger.debug(
         "liasse_fiscale chargée : sections %s", sorted(resultat.keys())
     )

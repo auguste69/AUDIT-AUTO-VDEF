@@ -6,9 +6,12 @@ Onglets produits :
   2. Balance N Vs N-1  (tous les comptes, valeurs brutes)
   3. Bilan              (Actif / Passif synthétiques côte à côte)
   4. EBIT               (résultat d'exploitation, cerfa 2052)
-  5. Tréso              (BFR, FRNG, TN — agrégé par poste)
-  6. AACE               (Autres Achats et Charges Externes — comptes 606-609, 61x, 62x)
-  7. Un onglet par cycle  (A0, V0, C Propres0, …)
+  5. Actif détaillé     (format liasse 2050)
+  6. Passif détaillé    (format liasse 2051)
+  7. P&L détaillé       (compte de résultat complet, cerfa 2052/2053)
+  8. Tréso              (BFR, FRNG, TN — agrégé par poste)
+  9. AACE               (Autres Achats et Charges Externes — comptes 606-609, 61x, 62x)
+ 10. Un onglet par cycle  (A0, V0, C Propres0, …)
      — sections ACTIF / PASSIF / CHARGES / PRODUITS (seulement si non vides)
      — convention de signe : PASSIF et PRODUITS sont présentés en positif (Solde × -1)
 """
@@ -22,10 +25,15 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from src.engine.financial_engine import (
-    calculer_bilan, calculer_ebit, calculer_treso, filtrer_aace,
+    calculer_actif_detaille, calculer_bilan, calculer_ebit,
+    calculer_passif_detaille, calculer_pl_detaille, calculer_treso,
+    filtrer_aace,
 )
 from src.engine.liasse_fiscale_loader import load_liasse_fiscale
+from src.writers.fm.actif_detaille import ecrire_actif_detaille_tab
 from src.writers.fm.ebit import ecrire_ebit_tab
+from src.writers.fm.passif_detaille import ecrire_passif_detaille_tab
+from src.writers.fm.pl_detaille import ecrire_pl_detaille_tab
 from src.writers.styles import (
     remove_gridlines, set_col_widths, write_title_block,
     write_header_row, write_data_row, write_section_label, write_total_row,
@@ -591,10 +599,10 @@ def write(
             "défaut %s", _PCG_DEFAULT,
         )
         pcg_config = from_pcg_config(_PCG_DEFAULT)
+    # load_liasse_fiscale fournit aussi les sections ebit, pl_detaille et
+    # les structures actif/passif détaillés (pass-through, validation
+    # déléguée aux fonctions calculer_* de financial_engine).
     liasse_fiscale = load_liasse_fiscale(pcg_config)
-    # La section ebit n'est pas couverte par load_liasse_fiscale (validation
-    # déléguée à calculer_ebit) — l'ajouter depuis la section brute du YAML.
-    liasse_fiscale["ebit"] = (pcg_config.get("liasse_fiscale") or {}).get("ebit") or {}
 
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -639,10 +647,27 @@ def write(
     _ecrire_bilan_tab(ws_bilan, balance_mappee, date_n, date_n1, client,
                       liasse_fiscale)
 
-    # --- EBIT (entre Bilan et Tréso) ---
+    # --- EBIT (entre Bilan et Actif détaillé) ---
     ws_ebit = wb.create_sheet("EBIT")
     ebit = calculer_ebit(balance_mappee, liasse_fiscale)
     ecrire_ebit_tab(ws_ebit, ebit, date_n, date_n1, client)
+
+    # --- Actif détaillé (cerfa 2050) ---
+    ws_actif = wb.create_sheet("Actif détaillé")
+    actif_detaille = calculer_actif_detaille(balance_mappee, liasse_fiscale)
+    ecrire_actif_detaille_tab(ws_actif, actif_detaille, date_n, date_n1,
+                              client)
+
+    # --- Passif détaillé (cerfa 2051) ---
+    ws_passif = wb.create_sheet("Passif détaillé")
+    passif_detaille = calculer_passif_detaille(balance_mappee, liasse_fiscale)
+    ecrire_passif_detaille_tab(ws_passif, passif_detaille, date_n, date_n1,
+                               client)
+
+    # --- P&L détaillé (cerfa 2052/2053) ---
+    ws_pl = wb.create_sheet("P&L détaillé")
+    pl_detaille = calculer_pl_detaille(balance_mappee, liasse_fiscale)
+    ecrire_pl_detaille_tab(ws_pl, pl_detaille, date_n, date_n1, client)
 
     # --- Tréso ---
     ws_treso = wb.create_sheet("Tréso")
