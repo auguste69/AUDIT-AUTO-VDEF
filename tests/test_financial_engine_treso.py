@@ -140,3 +140,71 @@ def test_treso_ne_modifie_pas_la_balance(balance_treso, liasse):
     copie = balance_treso.copy(deep=True)
     calculer_treso(balance_treso, liasse)
     pd.testing.assert_frame_equal(balance_treso, copie)
+
+
+# ---------------------------------------------------------------------------
+# Corrections audit : résultat en cours, c/c associés, cohérence TN
+# ---------------------------------------------------------------------------
+
+def test_treso_resultat_en_cours_dans_ressources(liasse):
+    """Le résultat non clôturé (classes 6/7) compte en ressources stables."""
+    bal = _balance([
+        ("601000", "Achats",  60.0,  50.0),
+        ("701000", "Ventes", -100.0, -80.0),
+        ("512000", "Banque",  40.0,  30.0),
+    ])
+    treso = calculer_treso(bal, liasse)
+    # Bénéfice de 40 (N) / 30 (N-1) → ressource positive
+    assert treso.postes["resultat_enc"].as_tuple() == (40.0, 30.0)
+    assert treso.tn.as_tuple() == (40.0, 30.0)
+    assert treso.postes["tn_verif"].as_tuple() == (40.0, 30.0)
+
+
+def test_treso_comptes_courants_associes_crediteurs(liasse):
+    """Les c/c d'associés créditeurs (45x) sont capturés au passif circulant."""
+    bal = _balance([
+        ("455100", "C/C associé", -70.0, -60.0),
+        ("512000", "Banque",       70.0,  60.0),
+    ])
+    treso = calculer_treso(bal, liasse)
+    assert treso.postes["autres_det"].as_tuple() == (70.0, 60.0)
+    assert treso.tn.as_tuple() == (70.0, 60.0)
+    assert treso.postes["tn_verif"].as_tuple() == (70.0, 60.0)
+
+
+def test_treso_fournisseur_debiteur_pas_de_double_comptage(liasse):
+    """Un 401 débiteur va dans les autres créances, PAS en moins des dettes."""
+    bal = _balance([
+        ("401100", "Fournisseur débiteur",  15.0,  10.0),
+        ("401200", "Fournisseurs",         -50.0, -40.0),
+        ("512000", "Banque",                35.0,  30.0),
+    ])
+    treso = calculer_treso(bal, liasse)
+    assert treso.postes["autres_crean"].as_tuple() == (15.0, 10.0)
+    assert treso.postes["det_fourn"].as_tuple() == (50.0, 40.0)
+    assert treso.tn.as_tuple() == treso.postes["tn_verif"].as_tuple()
+
+
+def test_treso_coherence_tn_balance_complexe(liasse):
+    """TN (FRNG − BFR) = trésorerie directe sur une balance hétérogène."""
+    bal = _balance([
+        ("101000", "Capital",            -100.0,  -90.0),
+        ("213000", "Constructions",        80.0,   70.0),
+        ("281300", "Amort constructions", -20.0,  -15.0),
+        ("311000", "Stocks MP",            30.0,   25.0),
+        ("419100", "Clients créditeurs",  -12.0,   -8.0),
+        ("455100", "C/C associé",         -25.0,  -20.0),
+        ("486000", "CCA",                   5.0,    4.0),
+        ("601000", "Achats",               60.0,   50.0),
+        ("701000", "Ventes",              -90.0,  -76.0),
+        ("519000", "CBC",                 -10.0,   -5.0),
+        ("512000", "Banque",               82.0,   65.0),
+    ])
+    treso = calculer_treso(bal, liasse)
+    for idx in (0, 1):
+        assert treso.tn.as_tuple()[idx] == pytest.approx(
+            treso.postes["tn_verif"].as_tuple()[idx], abs=0.001
+        )
+    # 519 créditeur en trésorerie passive (classe 5 < 0), jamais en double
+    assert treso.postes["treso_passive"].as_tuple() == (10.0, 5.0)
+    assert treso.postes["treso_active"].as_tuple() == (82.0, 65.0)

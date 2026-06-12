@@ -72,9 +72,20 @@ def test_colonnes_presentes(balance):
     assert list(balance.columns) == COLONNES_ATTENDUES
 
 
-def test_nb_comptes(balance):
-    """Le FEC GILAC 2025 contient 270 comptes distincts."""
-    assert len(balance) == 270
+def test_nb_comptes(balance, df_fec, balance_n1):
+    """270 comptes du FEC GILAC 2025 + les comptes N-1 soldés en N."""
+    nums_fec = set(df_fec["CompteNum"].astype(str))
+    orphelins_attendus = [
+        num for num, info in balance_n1.items()
+        if num not in nums_fec and abs(info["solde_ke"]) >= 0.0005
+    ]
+    assert len(orphelins_attendus) > 0
+    assert len(balance) == 270 + len(orphelins_attendus)
+
+
+def test_nb_comptes_sans_n1(balance_sans_n1):
+    """Sans balance N-1, uniquement les 270 comptes du FEC."""
+    assert len(balance_sans_n1) == 270
 
 
 def test_trie_par_comptenum(balance):
@@ -157,6 +168,55 @@ def test_sans_n1_var_ke_egale_solde_ke(balance_sans_n1):
     """Sans N-1, Var_KE = Solde_KE."""
     diff = (balance_sans_n1["Solde_KE"] - balance_sans_n1["Var_KE"]).abs()
     assert diff.max() < 0.001
+
+
+# ---------------------------------------------------------------------------
+# Comptes N-1 soldés en N (orphelins)
+# ---------------------------------------------------------------------------
+
+def test_somme_n1_nulle(balance):
+    """Avec les comptes N-1 soldés inclus, la somme des soldes N-1 reboucle à 0."""
+    assert abs(balance["Solde_N1_KE"].sum()) < 0.01
+
+
+def test_orphelins_n1_presents_avec_solde_n_zero(balance, df_fec):
+    """Les comptes N-1 absents du FEC figurent avec des montants N à 0."""
+    nums_fec = set(df_fec["CompteNum"].astype(str))
+    orphelins = balance[~balance["CompteNum"].astype(str).isin(nums_fec)]
+    assert len(orphelins) > 0
+    assert (orphelins["Solde"] == 0.0).all()
+    assert (orphelins["Solde_KE"] == 0.0).all()
+    assert (orphelins["Solde_N1_KE"] != 0.0).all()
+    # La variation d'un compte soldé = − solde N-1
+    diff = (orphelins["Var_KE"] + orphelins["Solde_N1_KE"]).abs()
+    assert diff.max() < 0.001
+
+
+def test_orphelin_n1_solde_zero_ignore(df_fec):
+    """Un compte N-1 à solde nul et absent du FEC n'ajoute pas de ligne."""
+    n1 = {"999999": {"libelle": "Compte fantôme", "solde_ke": 0.0}}
+    bal = build(df_fec, n1)
+    assert "999999" not in set(bal["CompteNum"].astype(str))
+
+
+# ---------------------------------------------------------------------------
+# Agrégation par CompteNum seul (libellés multiples)
+# ---------------------------------------------------------------------------
+
+def test_compte_multi_libelles_une_seule_ligne(df_fec):
+    """Un compte dont le libellé change en cours d'exercice donne UNE ligne."""
+    df = df_fec.copy()
+    compte = df.iloc[0]["CompteNum"]
+    masque = df["CompteNum"] == compte
+    # Renomme le libellé sur la moitié des écritures du compte
+    indices = df.index[masque]
+    df.loc[indices[: len(indices) // 2 + 1], "CompteLib"] = "LIBELLE RENOMME"
+    n1 = {str(compte): {"libelle": "X", "solde_ke": 42.0}}
+    bal = build(df, n1)
+    lignes = bal[bal["CompteNum"] == compte]
+    assert len(lignes) == 1, "Un CompteNum ne doit produire qu'une ligne"
+    # Le solde N-1 n'est compté qu'une fois
+    assert abs(lignes.iloc[0]["Solde_N1_KE"] - 42.0) < 0.001
 
 
 # ---------------------------------------------------------------------------

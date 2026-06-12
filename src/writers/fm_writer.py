@@ -361,6 +361,7 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
     section("FONDS DE ROULEMENT NET GLOBAL (FRNG)")
     section("Ressources stables")
     poste("Capitaux propres (10–14)",                         t["cap_propres"])
+    poste("Résultat de l'exercice en cours (classes 6–7)",    t["resultat_enc"])
     poste("Amortissements et dépréciations (28, 29, 39, 49)", t["amort_dep"])
     poste("Provisions pour risques et charges (15)",          t["prov_risques"])
     poste("Dettes financières MLT (16, 17)",                  t["dettes_mlt"])
@@ -375,18 +376,18 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
 
     # ---- BFR --------------------------------------------------------
     section("BESOIN EN FONDS DE ROULEMENT (BFR)")
-    section("Actif circulant d'exploitation")
-    poste("Stocks bruts (31–37)",                                    t["stocks"])
-    poste("Créances clients (411, 413, 416, 418)",                   t["crean_cli"])
-    poste("Autres créances d'exploitation (40, 44, 46, 47 > 0)",    t["autres_crean"])
-    poste("Charges constatées d'avance — CCA (486)",                 t["cca"])
+    section("Actif circulant")
+    poste("Stocks bruts (30–38)",                                    t["stocks"])
+    poste("Créances clients (41 > 0)",                               t["crean_cli"])
+    poste("Autres créances (40, 42–47 > 0)",                         t["autres_crean"])
+    poste("Comptes de régularisation actif — CCA (48 > 0)",          t["cca"])
     sous_total("= Total actif circulant",                            t["total_ac"])
     blank()
-    section("Passif circulant d'exploitation")
-    poste("Dettes fournisseurs (401, 403, 408)",                     t["det_fourn"])
+    section("Passif circulant")
+    poste("Dettes fournisseurs (40 < 0)",                            t["det_fourn"])
     poste("Dettes fiscales et sociales (42, 43, 44 < 0)",            t["det_fisc"])
-    poste("Autres dettes d'exploitation (46, 47 < 0)",               t["autres_det"])
-    poste("Produits constatés d'avance — PCA (487)",                 t["pca"])
+    poste("Autres dettes (41, 45, 46, 47 < 0)",                      t["autres_det"])
+    poste("Comptes de régularisation passif — PCA (48 < 0)",         t["pca"])
     sous_total("= Total passif circulant",                           t["total_pc"])
     blank()
     sous_total("= BFR",                                              t["bfr"])
@@ -398,9 +399,12 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
 
     # ---- Vérification -----------------------------------------------
     section("Vérification — trésorerie directe")
-    poste("Trésorerie active (50, 51, 53 > 0)",      t["treso_active"])
-    poste("Trésorerie passive (519 + 512 < 0)",      t["treso_passive"])
+    poste("Trésorerie active (classe 5 > 0)",        t["treso_active"])
+    poste("Trésorerie passive (classe 5 < 0)",       t["treso_passive"])
     sous_total("= TN (vérification directe)",        t["tn_verif"])
+    ecart = (round(t["tn"][0] - t["tn_verif"][0], 3),
+             round(t["tn"][1] - t["tn_verif"][1], 3))
+    poste("Écart de cohérence (TN − vérification)",  ecart)
 
     logger.info(
         "Tréso : onglet généré (FRNG=%.0f, BFR=%.0f, TN=%.0f K€)",

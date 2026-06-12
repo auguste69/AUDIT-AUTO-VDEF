@@ -150,19 +150,20 @@ class TestRunAllRetrocompatibilite:
         resultats = run_all(_fec_minimal(), DATE_CLOTURE)
         assert len(resultats) == 9
 
-    def test_run_all_avec_balance_13_controles(self, liasse_config):
-        """run_all avec balance_mappee + liasse_config → 13 contrôles
+    def test_run_all_avec_balance_14_controles(self, liasse_config):
+        """run_all avec balance_mappee + liasse_config → 14 contrôles
         (9 FEC + AC-1 + cohérence résultat + cohérence états détaillés
-        + cohérence résultat net P&L, prompt 10)."""
+        + cohérence résultat net P&L + cohérence Tréso)."""
         resultats = run_all(
             _fec_minimal(), DATE_CLOTURE,
             balance_mappee=_balance_equilibree(),
             liasse_config=liasse_config,
         )
-        assert len(resultats) == 13
+        assert len(resultats) == 14
         noms = [r[0] for r in resultats]
         assert NOM_AC1 in noms
         assert "Cohérence du résultat" in noms
+        assert "Cohérence Tréso (TN vs trésorerie directe)" in noms
 
     def test_run_all_balance_sans_liasse_9_controles(self):
         """run_all avec balance mais sans liasse_config → 9 contrôles."""

@@ -3,8 +3,10 @@ Test de régression cellulaire du FM GILAC.
 
 Régénère le FM complet dans un répertoire temporaire et le compare, cellule
 par cellule (valeurs + number_format), à la fixture de référence
-tests/fixtures/FM_GILAC_2025_POST_FIX.xlsx (snapshot pris avant la migration
-des préfixes PCG vers la section liasse_fiscale du mapping_pcg.yaml).
+tests/fixtures/FM_GILAC_2025_POST_FIX.xlsx (snapshot pris après les
+corrections d'audit : comptes N-1 soldés inclus dans la balance, Tréso
+cohérente — résultat en cours et classe 4/5 par signe, préfixes Bilan
+512/517/519/509 sans double comptage).
 
 Règles de comparaison :
 - Comparaison PAR NOM D'ONGLET (jamais par index) — uniquement les onglets
