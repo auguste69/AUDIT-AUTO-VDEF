@@ -23,6 +23,12 @@ FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
 FM_REF   = DATA_DIR / "FM GILAC.xlsx"
 PCG_PATH = CONFIG_DIR / "mapping_pcg.yaml"
 
+pytestmark = pytest.mark.skipif(
+    not FEC_PATH.exists() or not FM_REF.exists(),
+    reason="Fichiers GILAC absents (données client retirées du dépôt — "
+           "couverture assurée par tests/test_pipeline_synthetique.py)",
+)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

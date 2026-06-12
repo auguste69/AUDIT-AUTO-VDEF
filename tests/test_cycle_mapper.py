@@ -20,6 +20,14 @@ FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
 FM_PATH  = DATA_DIR / "FM GILAC.xlsx"
 PCG_PATH = CONFIG_DIR / "mapping_pcg.yaml"
 
+# Seuls les tests utilisant le FEC/FM réels sont conditionnés : les tests
+# de résolution par préfixe (config YAML uniquement) tournent toujours.
+necessite_gilac = pytest.mark.skipif(
+    not FEC_PATH.exists() or not FM_PATH.exists(),
+    reason="Fichiers GILAC absents (données client retirées du dépôt — "
+           "couverture assurée par tests/test_pipeline_synthetique.py)",
+)
+
 # 29 nouveaux comptes 2025 absents du FM (à mapper via PCG)
 NOUVEAUX_COMPTES = [
     "106810", "231500", "401500", "401600", "409100",
@@ -67,6 +75,7 @@ def balance_mappee(balance, mapping_fm, pcg):
 # Tests : mapping_parser.from_fm
 # ---------------------------------------------------------------------------
 
+@necessite_gilac
 class TestFromFm:
 
     def test_nb_comptes_fm(self, mapping_fm):
@@ -205,6 +214,7 @@ class TestResolutionCompta:
 # Tests : map_cycles — bout en bout sur GILAC
 # ---------------------------------------------------------------------------
 
+@necessite_gilac
 class TestMapCycles:
 
     def test_shape(self, balance, balance_mappee):

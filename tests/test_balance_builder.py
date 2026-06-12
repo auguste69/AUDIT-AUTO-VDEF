@@ -16,6 +16,12 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
 FM_PATH  = DATA_DIR / "FM GILAC.xlsx"
 
+pytestmark = pytest.mark.skipif(
+    not FEC_PATH.exists() or not FM_PATH.exists(),
+    reason="Fichiers GILAC absents (données client retirées du dépôt — "
+           "couverture assurée par tests/test_pipeline_synthetique.py)",
+)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

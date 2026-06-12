@@ -9,9 +9,9 @@ Exemples :
     python3 main.py data/client_FEC.txt --client ACME --date-cloture 31/12/2025
 
     # Avec FM N-1 et templates
-    python3 main.py data/GILAC_2025_12_31_FEC.txt \\
-        --client GILAC --date-cloture 31/12/2025 \\
-        --n1-fm data/FM\\ GILAC.xlsx \\
+    python3 main.py data/client_FEC.txt \\
+        --client ACME --date-cloture 31/12/2025 \\
+        --n1-fm data/FM_ACME_N-1.xlsx \\
         --templates data/templates/ \\
         --output output/
 """
