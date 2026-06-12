@@ -1,12 +1,15 @@
 """
-Test de régression cellulaire du FM GILAC.
+Test de régression cellulaire du FM sur données synthétiques.
 
-Régénère le FM complet dans un répertoire temporaire et le compare, cellule
-par cellule (valeurs + number_format), à la fixture de référence
-tests/fixtures/FM_GILAC_2025_POST_FIX.xlsx (snapshot pris après les
-corrections d'audit : comptes N-1 soldés inclus dans la balance, Tréso
-cohérente — résultat en cours et classe 4/5 par signe, préfixes Bilan
-512/517/519/509 sans double comptage).
+Régénère le FM complet dans un répertoire temporaire à partir du FEC et de
+la balance N-1 synthétiques (tests/synthetic_data.py, déterministes) et le
+compare, cellule par cellule (valeurs + number_format), à la fixture de
+référence tests/fixtures/FM_SYNTHETIQUE_REF.xlsx.
+
+Toute modification du moteur ou des writers qui change une valeur, un
+format ou la structure d'un onglet fait échouer ce test : si le changement
+est voulu, régénérer la fixture avec scripts/generer_fixture_fm.py et
+vérifier le diff onglet par onglet.
 
 Règles de comparaison :
 - Comparaison PAR NOM D'ONGLET (jamais par index) — uniquement les onglets
@@ -24,25 +27,18 @@ import pandas as pd
 import pytest
 
 from src.parsers.fec_parser import parse
-from src.parsers.mapping_parser import from_fm, from_pcg_config
+from src.parsers.balance_n1_loader import load_balance_n1
+from src.parsers.mapping_parser import from_pcg_config
 from src.engine.balance_builder import build
 from src.engine.cycle_mapper import map_cycles
 from src.writers.fm_writer import write
+from tests.synthetic_data import generer_balance_n1_xlsx, generer_fec_synthetique
 
-DATA_DIR    = Path(__file__).parent.parent / "data"
-CONFIG_DIR  = Path(__file__).parent.parent / "src" / "config"
-FIXTURE_FM  = Path(__file__).parent / "fixtures" / "FM_GILAC_2025_POST_FIX.xlsx"
-
-FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
-FM_REF   = DATA_DIR / "FM GILAC.xlsx"
-PCG_PATH = CONFIG_DIR / "mapping_pcg.yaml"
+CONFIG_DIR = Path(__file__).parent.parent / "src" / "config"
+FIXTURE_FM = Path(__file__).parent / "fixtures" / "FM_SYNTHETIQUE_REF.xlsx"
+PCG_PATH   = CONFIG_DIR / "mapping_pcg.yaml"
 
 _TOLERANCE = 0.01
-
-pytestmark = pytest.mark.skipif(
-    not FEC_PATH.exists() or not FM_REF.exists(),
-    reason="Fichiers GILAC absents (data/ non committé)",
-)
 
 
 # ---------------------------------------------------------------------------
@@ -50,32 +46,18 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def balance_mappee() -> pd.DataFrame:
-    """Construit la balance mappée GILAC (même pipeline que main.py)."""
-    df  = parse(FEC_PATH)
-    mfm = from_fm(FM_REF)
+def balance_mappee(tmp_path_factory) -> pd.DataFrame:
+    """Construit la balance mappée synthétique (même pipeline que main.py)."""
+    tmp = tmp_path_factory.mktemp("fm_regression_data")
+    fec = generer_fec_synthetique(tmp / "DEMO_2025_FEC.txt")
+    n1_xlsx = generer_balance_n1_xlsx(tmp / "balance_n1.xlsx")
+
+    df = parse(fec)
+    balance_n1, _ = load_balance_n1(n1_xlsx)
     pcg = from_pcg_config(PCG_PATH)
 
-    # Soldes N-1 extraits du FM existant (même logique que run_pipeline)
-    wb = openpyxl.load_workbook(FM_REF, read_only=True, data_only=True)
-    ws = wb["Balance N Vs N-1"]
-    balance_n1: dict = {}
-    for row in ws.iter_rows(min_row=10, values_only=True):
-        if row[1] is None:
-            continue
-        try:
-            num = str(int(float(row[1])))
-        except (ValueError, TypeError):
-            continue
-        solde = float(row[3]) if row[3] is not None else 0.0
-        balance_n1[num] = {
-            "libelle":  str(row[2]) if row[2] else "",
-            "solde_ke": solde,
-        }
-    wb.close()
-
     bal = build(df, balance_n1)
-    return map_cycles(bal, mfm, pcg)
+    return map_cycles(bal, None, pcg)
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +65,7 @@ def fm_regen_path(balance_mappee, tmp_path_factory) -> Path:
     """Régénère le FM dans un tmp_path pytest avec la config PCG par défaut."""
     out = tmp_path_factory.mktemp("fm_regression")
     pcg = from_pcg_config(PCG_PATH)
-    return write(balance_mappee, "GILAC", "31/12/2025", out, pcg_config=pcg)
+    return write(balance_mappee, "DEMO", "31/12/2025", out, pcg_config=pcg)
 
 
 @pytest.fixture(scope="module")

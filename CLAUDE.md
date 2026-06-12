@@ -299,7 +299,9 @@ Les onglets cycle (A0, V0, etc.) ont la même structure avec en plus des sous-se
 
 ## Données de test (client GILAC — exemple, pas une limitation)
 
-Ces données servent à tester le pipeline. Le système fonctionne avec n'importe quel FEC français.
+Ces données servaient à tester le pipeline. Le système fonctionne avec n'importe quel FEC français.
+
+**⚠️ Confidentialité :** les fichiers client réels (FEC GILAC, FM GILAC) ont été retirés du dépôt. Les tests qui en dépendent se désactivent automatiquement (`skipif`) et se réactivent si les fichiers sont replacés dans `data/`. La couverture « données réelles » est assurée par un jeu synthétique déterministe : `tests/synthetic_data.py` (générateur FEC + balance N-1), `tests/test_pipeline_synthetique.py` (end-to-end) et `tests/test_fm_regression_cellulaire.py` (régression cellulaire, fixture régénérable via `python3 -m scripts.generer_fixture_fm`). Caractéristiques historiques du jeu GILAC, pour mémoire :
 
 - **FEC 2025** : 106 272 lignes, encodage CP1252, séparateur TAB, dates du 01/01/2025 au 31/12/2025
 - **Balance 2025** : 270 comptes, équilibre parfait (écart = 0.00), résultat = -2 572 709 € (-2 573 K€)
@@ -319,7 +321,7 @@ pip3 install -r requirements.txt
 python3 -m pytest tests/ -v
 
 # Lancer le CLI
-python3 main.py data/GILAC_2025_FEC.txt --client GILAC --date-cloture 31/12/2025 --n1-fm data/FM_GILAC.xlsx --templates data/templates/ --output output/
+python3 main.py chemin/vers/FEC.txt --client NOM_CLIENT --date-cloture 31/12/2025 --n1-fm chemin/vers/FM_N-1.xlsx --templates data/templates/ --output output/
 
 # Lancer l'interface Streamlit
 python3 -m streamlit run app.py

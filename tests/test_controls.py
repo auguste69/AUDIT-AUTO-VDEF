@@ -16,6 +16,14 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
 DATE_CLOTURE = "31/12/2025"
 
+# Seuls les tests de bout en bout sur le FEC réel sont conditionnés : les
+# tests unitaires sur DataFrames synthétiques tournent toujours.
+necessite_gilac = pytest.mark.skipif(
+    not FEC_PATH.exists(),
+    reason="Fichiers GILAC absents (données client retirées du dépôt — "
+           "couverture assurée par tests/test_pipeline_synthetique.py)",
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,6 +82,7 @@ def resultats_gilac(fec_gilac) -> dict:
 # Tests sur le FEC GILAC (bout en bout)
 # ---------------------------------------------------------------------------
 
+@necessite_gilac
 class TestGilac:
 
     def test_run_all_retourne_9_controles(self, resultats_gilac):
@@ -270,6 +279,7 @@ class TestBenford:
         assert ok is False
         assert sev == "INFO"
 
+    @necessite_gilac
     def test_champs_mad_chi2_dans_detail(self, fec_gilac):
         res = _resultats_dict(run_all(fec_gilac, DATE_CLOTURE))
         _, detail, _ = res["Benford (1er chiffre)"]

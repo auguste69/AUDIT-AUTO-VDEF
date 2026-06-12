@@ -14,6 +14,12 @@ from src.parsers.fec_parser import parse, COLONNES_OBLIGATOIRES
 DATA_DIR = Path(__file__).parent.parent / "data"
 FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
 
+pytestmark = pytest.mark.skipif(
+    not FEC_PATH.exists(),
+    reason="Fichiers GILAC absents (données client retirées du dépôt — "
+           "couverture assurée par tests/test_pipeline_synthetique.py)",
+)
+
 
 @pytest.fixture(scope="module")
 def fec() -> pd.DataFrame:
