@@ -334,10 +334,13 @@ def _ctrl_benford(
     if len(vals) == 0:
         return ("Benford", True, "Aucun montant à analyser", "INFO")
 
-    # Premier chiffre significatif
+    # Premier chiffre significatif. On retire en tête les zéros ET le point
+    # décimal : sans cela, un montant < 0,10 € (ex. 0.05 → "0.0500000000")
+    # garde un "0" après la virgule et serait écarté à tort, alors que son
+    # premier chiffre significatif est 5.
     premiers: List[int] = []
     for v in vals:
-        s = f"{abs(v):.10f}".lstrip("0").replace(".", "")
+        s = f"{abs(v):.10f}".lstrip("0.").replace(".", "")
         if s:
             d = int(s[0])
             if 1 <= d <= 9:

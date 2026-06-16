@@ -99,8 +99,9 @@ def _var_pct_val(var_pct) -> Union[float, str]:
 def _ecrire_sommaire(ws, client: str, date_cloture: str, cycles: list) -> None:
     # NB : la liste des feuilles maîtresses (rows 12-14) est statique — elle
     # n'est pas générée depuis les onglets du classeur. Elle est figée par la
-    # fixture de régression cellulaire (tests/fixtures/FM_GILAC_2025_POST_FIX
-    # .xlsx) : ne pas y insérer de ligne sans régénérer la fixture.
+    # fixture de régression cellulaire (tests/fixtures/FM_SYNTHETIQUE_REF.xlsx,
+    # régénérable via `python3 -m scripts.generer_fixture_fm`) : ne pas y
+    # insérer de ligne sans régénérer la fixture.
     remove_gridlines(ws)
     set_col_widths(ws, {"A": 4, "B": 30, "C": 50})
 
