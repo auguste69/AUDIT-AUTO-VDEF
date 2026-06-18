@@ -128,6 +128,18 @@ def test_proposer_sans_orphelins(pcg):
     assert proposer_rapprochements(comptes_n, balance_n1, None, pcg) == []
 
 
+def test_proposer_garde_fou_granularite_collectif(pcg):
+    """Un collectif 3 chiffres (À-NOUVEAU) n'est jamais rapproché d'un détail.
+
+    Cas réel (CSVP) : le FEC porte le collectif "411" tandis que la balance
+    N-1 a le détail "41110000". Malgré un préfixe et un libellé identiques,
+    aucune fusion collectif↔détail ne doit être proposée.
+    """
+    comptes_n = {"411": "Collectif client"}
+    balance_n1 = _balance_n1({"41110000": "Collectif client"})
+    assert proposer_rapprochements(comptes_n, balance_n1, None, pcg) == []
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — appliquer_rapprochements
 # ---------------------------------------------------------------------------

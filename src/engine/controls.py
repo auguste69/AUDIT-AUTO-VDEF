@@ -264,16 +264,25 @@ def _ctrl_ecritures_dimanche(
     df: pd.DataFrame,
     **_,
 ) -> ResultatControle:
-    """Signale les écritures dont EcritureDate tombe un dimanche."""
+    """
+    Signale les écritures dont EcritureDate tombe un dimanche.
+
+    Signal purement informatif : une activité 7j/7 (hôtellerie, santé,
+    commerce) passe légitimement des milliers d'écritures le dimanche. Le
+    contrôle n'« échoue » donc jamais (ok=True, INFO) ; il rapporte le nombre
+    et la part du FEC concernés pour examen, à recouper avec le secteur.
+    """
+    total = len(df)
     dates = pd.to_datetime(df["EcritureDate"], format="%Y%m%d", errors="coerce")
-    dimanches = (dates.dt.dayofweek == 6).sum()
-    ok = bool(dimanches == 0)
+    dimanches = int((dates.dt.dayofweek == 6).sum())
+    ratio = (dimanches / total) if total else 0.0
     detail = (
-        f"{dimanches} écriture(s) passée(s) un dimanche"
+        f"{dimanches} écriture(s) un dimanche ({ratio:.1%} du FEC) — "
+        f"normal pour une activité 7j/7, à recouper avec le secteur"
         if dimanches
         else "Aucune écriture un dimanche"
     )
-    return ("Écritures un dimanche", ok, detail, "WARNING")
+    return ("Écritures un dimanche", True, detail, "INFO")
 
 
 def _ctrl_montants_ronds(
@@ -298,19 +307,63 @@ def _ctrl_montants_ronds(
     return ("Montants ronds", ok, detail, "INFO")
 
 
-def _ctrl_doublons(df: pd.DataFrame, **_) -> ResultatControle:
-    """Détecte les doublons potentiels : même journal, numéro, compte, montants et libellé."""
-    cles = ["JournalCode", "EcritureNum", "CompteNum", "Debit", "Credit", "EcritureLib"]
+# Ratio de lignes en doublon au-dessus duquel le contrôle est signalé (KO).
+# Un FEC volumétrique (caisse/POS, agrégation journalière) contient
+# légitimement des lignes identiques ; on ne signale que si la proportion
+# dépasse ce seuil — exprimé en ratio pour rester valable du micro au
+# multi-millions de lignes.
+SEUIL_DOUBLONS_RATIO = 0.05  # 5 % des lignes
+
+
+def _ctrl_doublons(
+    df: pd.DataFrame,
+    seuil_doublons_ratio: float = SEUIL_DOUBLONS_RATIO,
+    **_,
+) -> ResultatControle:
+    """
+    Détecte les doublons potentiels.
+
+    Clé enrichie : un vrai doublon exige l'identité sur le journal, le numéro
+    d'écriture, la date d'écriture, la pièce (réf. + date), le compte, les
+    montants ET le libellé. Sur un FEC volumétrique (caisse/POS, agrégation
+    journalière), des lignes structurellement identiques d'un jour ou d'une
+    pièce à l'autre ne sont PAS des doublons : enrichir la clé avec les dates
+    et la référence de pièce élimine ces faux positifs.
+
+    Verdict : OK tant que le ratio de lignes en doublon reste sous
+    seuil_doublons_ratio (défaut 5 %). On rapporte un ratio et un échantillon
+    plafonné plutôt qu'un comptage brut, pour rester exploitable quelle que
+    soit la taille du FEC.
+    """
+    # On n'inclut une colonne dans la clé que si elle est présente
+    # (rétrocompatibilité avec des FEC partiels).
+    cles_souhaitees = [
+        "JournalCode", "EcritureNum", "EcritureDate",
+        "PieceRef", "PieceDate", "CompteNum",
+        "Debit", "Credit", "EcritureLib",
+    ]
+    cles = [c for c in cles_souhaitees if c in df.columns]
+
+    total = len(df)
     masque = df.duplicated(subset=cles, keep=False)
     nb_lignes = int(masque.sum())
-    # Nombre de groupes distincts en doublon
     nb_groupes = df[masque].groupby(cles).ngroups if nb_lignes else 0
-    ok = bool(nb_lignes == 0)
-    detail = (
-        f"{nb_lignes} ligne(s) en doublon potentiel ({nb_groupes} groupe(s) distincts)"
-        if nb_lignes
-        else "Aucun doublon potentiel détecté"
-    )
+    ratio = (nb_lignes / total) if total else 0.0
+    ok = bool(ratio <= seuil_doublons_ratio)
+
+    if nb_lignes == 0:
+        detail = "Aucun doublon potentiel détecté"
+    else:
+        # Échantillon plafonné : tailles des 5 plus gros groupes, sans dumper
+        # des dizaines de milliers de lignes dans le rapport.
+        tailles = df[masque].groupby(cles).size().sort_values(ascending=False)
+        echantillon = "  ".join(f"{int(n)}×" for n in tailles.head(5).tolist())
+        detail = (
+            f"{nb_lignes} ligne(s) en doublon potentiel "
+            f"({ratio:.1%} du FEC, {nb_groupes} groupe(s)) — "
+            f"clé : {'+'.join(cles)} — top groupes : {echantillon} "
+            f"(seuil d'alerte : {seuil_doublons_ratio:.0%})"
+        )
     return ("Doublons potentiels", ok, detail, "WARNING")
 
 
@@ -363,16 +416,21 @@ def _ctrl_benford(
         for d in range(1, 10)
     )
 
-    ok = bool(mad <= seuil_benford_mad)
+    # Benford est un INDICATEUR statistique, pas un test binaire de validité.
+    # Sur de gros volumes (prix de caisse récurrents), le MAD dépasse
+    # naturellement le seuil sans qu'il y ait fraude. On garde donc ok=True
+    # (jamais en échec) et on porte le verdict statistique dans le détail.
+    conforme = mad <= seuil_benford_mad
+    verdict = "conforme" if conforme else "écart notable (à interpréter)"
     distribution = "  ".join(
         f"{d}:{obs_freq[d]:.3f}(att:{BENFORD_ATTENDU[d]:.3f})"
         for d in range(1, 10)
     )
     detail = (
-        f"MAD={mad:.4f} (seuil={seuil_benford_mad}) — χ²={chi2:.2f} — "
-        f"n={total:,} montants\n  {distribution}"
+        f"MAD={mad:.4f} (seuil indicatif={seuil_benford_mad}, {verdict}) — "
+        f"χ²={chi2:.2f} — n={total:,} montants\n  {distribution}"
     )
-    return ("Benford (1er chiffre)", ok, detail, "INFO")
+    return ("Benford (1er chiffre)", True, detail, "INFO")
 
 
 def _ctrl_ecritures_tardives(

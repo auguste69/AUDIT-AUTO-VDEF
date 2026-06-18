@@ -511,6 +511,12 @@ integration_templates:
 rapprochements:
   # Score minimal pour PROPOSER un rapprochement (jamais pour fusionner seul)
   seuil: 0.5
+  # Un compte collectif court (≤ longueur_collectif chiffres, ex. "401",
+  # "411" issus des À-NOUVEAU sur compte collectif) ne doit jamais être
+  # rapproché d'un compte de détail long (8 chiffres) : populations de
+  # granularité différente (un total agrégé n'est pas un changement de
+  # numéro). Ce garde-fou évite des fusions collectif↔détail erronées.
+  longueur_collectif: 3
   # Poids des composantes du score composite (somme = 1.0)
   poids:
     prefixe: 0.40
@@ -557,7 +563,9 @@ liasse_fiscale:
       # via disponibilites_cond dans le code.
       disponibilites: ["511", "513", "514", "515", "516", "518", "53"]
       disponibilites_cond: ["512"]
-      # CCA (486) géré dynamiquement par comptes_bascule — liste vide voulue
+      # CCA (486) géré dynamiquement par comptes_bascule — liste vide voulue.
+      # Charges à répartir (481) : idem, capturé via comptes_bascule (débiteur
+      # → actif). Le total_actif synthétique somme bascule_actif, pas ce champ.
       cca: []
     passif:
       capital: ["101", "108"]
@@ -590,7 +598,8 @@ liasse_fiscale:
     comptes_bascule:
       # Reclassement dynamique actif/passif selon le signe du solde
       prefixes: ["425", "443", "444", "451", "455", "456",
-                 "467", "478", "486", "487", "509"]
+                 "467", "472", "473", "474", "475", "476", "477", "478",
+                 "481", "486", "487", "509"]
       # Sous-totaux interco affichés séparément (sous-ensemble des bascules,
       # filtré ">0" côté actif et "<0" côté passif dans le code)
       interco: ["451", "455"]
@@ -850,7 +859,8 @@ actif_detaille_structure:
            prefixes: [], prefixes_cond: ["451", "455"], condition: ">0"}
         - {cle: creances_diverses, libelle: "Créances diverses",
            prefixes: ["462", "465", "471"],
-           prefixes_cond: ["467", "478"], condition: ">0"}
+           prefixes_cond: ["467", "472", "473", "474", "475", "476", "477", "478"],
+           condition: ">0"}
         - {cle: capital_appele_non_verse,
            libelle: "Capital souscrit - appelé, non versé",
            prefixes: [], prefixes_cond: ["456"], condition: ">0"}
@@ -871,6 +881,9 @@ actif_detaille_structure:
     - cle: regularisation
       sous_total: "Comptes de régularisation"
       postes:
+        - {cle: charges_a_repartir,
+           libelle: "Charges à répartir sur plusieurs exercices",
+           prefixes: ["481"]}
         - {cle: cca, libelle: "Charges constatées d'avance",
            prefixes: [], prefixes_cond: ["486", "487"], condition: ">0"}
   agregats:
@@ -939,7 +952,8 @@ passif_detaille_structure:
            prefixes: [], prefixes_cond: ["451", "455"], condition: "<0"}
         - {cle: autres_dettes, libelle: "Autres dettes",
            prefixes: ["4196", "4197", "4198", "464"],
-           prefixes_cond: ["456", "467", "478", "509"], condition: "<0"}
+           prefixes_cond: ["456", "467", "472", "473", "474", "475", "476", "477", "478", "509"],
+           condition: "<0"}
     - cle: regularisation
       sous_total: "Comptes de régularisation"
       postes:
