@@ -171,12 +171,20 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
 BalanceN1Dict = Dict[str, Dict[str, Union[str, float]]]
 
 
-def from_balance_excel(path: Union[str, Path]) -> BalanceN1Dict:
+def from_balance_excel(
+    path: Union[str, Path],
+    sheet_name: Union[str, int] = 0,
+) -> BalanceN1Dict:
     """
     Lit un fichier Excel balance simple avec colonnes CompteNum, CompteLib, Solde (en €).
 
     La recherche des colonnes est insensible à la casse et aux espaces.
     Le solde est converti de € en K€ (÷ 1000).
+
+    Paramètres
+    ----------
+    sheet_name : str | int
+        Nom ou index de l'onglet à lire (0 = premier onglet par défaut).
 
     Retourne
     --------
@@ -193,7 +201,7 @@ def from_balance_excel(path: Union[str, Path]) -> BalanceN1Dict:
     if not chemin.exists():
         raise FileNotFoundError(f"Balance Excel introuvable : {chemin}")
 
-    df = pd.read_excel(chemin, dtype=str)
+    df = pd.read_excel(chemin, dtype=str, sheet_name=sheet_name)
 
     # Normaliser les noms de colonnes pour la recherche flexible
     col_map: Dict[str, str] = {str(c).strip().lower(): c for c in df.columns}
