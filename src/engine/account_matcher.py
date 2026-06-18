@@ -115,6 +115,19 @@ def _similarite_libelle(libelle_a: str, libelle_b: str,
     return len(tokens_a & tokens_b) / max(len(tokens_a), len(tokens_b))
 
 
+def _granularite_compatible(compte_a: str, compte_b: str,
+                            longueur_collectif: int) -> bool:
+    """Vrai si les deux numéros sont de même granularité.
+
+    Un compte collectif court (≤ longueur_collectif chiffres) et un compte de
+    détail long ne représentent pas la même population : on interdit de les
+    rapprocher (un total agrégé n'est pas un changement de numéro de compte).
+    """
+    a_collectif = len(str(compte_a)) <= longueur_collectif
+    b_collectif = len(str(compte_b)) <= longueur_collectif
+    return a_collectif == b_collectif
+
+
 def _cycle_et_compta(compte_num: str, mapping_fm: Optional[dict],
                      pcg_config: dict) -> Tuple[str, str]:
     """Cycle et classification bilan d'un compte : mapping FM du client en
@@ -218,16 +231,20 @@ def proposer_rapprochements(
     if config_rapprochements is None:
         config_rapprochements = pcg_config.get("rapprochements") or {}
     seuil = float(config_rapprochements.get("seuil", _SEUIL_DEFAUT))
+    longueur_collectif = int(config_rapprochements.get("longueur_collectif", 3))
 
     orphelins_n1, orphelins_n = detecter_orphelins(comptes_n, balance_n1)
     if not orphelins_n1 or not orphelins_n:
         return []
 
+    # Garde-fou granularité : on ne score jamais une paire collectif↔détail
+    # (ex. À-NOUVEAU sur compte collectif "411" vs détail "41110000").
     paires = [
         scorer_matching(num_n1, lib_n1, num_n, lib_n,
                         mapping_fm, pcg_config, config_rapprochements)
         for num_n1, lib_n1 in orphelins_n1.items()
         for num_n, lib_n in orphelins_n.items()
+        if _granularite_compatible(num_n1, num_n, longueur_collectif)
     ]
     paires = [p for p in paires if p.score >= seuil]
     paires.sort(key=lambda p: (-p.score, p.compte_n1, p.compte_n))

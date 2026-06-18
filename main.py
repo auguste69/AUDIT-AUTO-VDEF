@@ -111,11 +111,19 @@ def _valider_rapprochements(
         return []
 
     if not sys.stdin.isatty():
+        detail = "; ".join(
+            f"{r.compte_n1} ({r.libelle_n1}) -> {r.compte_n} "
+            f"({r.libelle_n}) [score {r.score:.2f}]"
+            for r in propositions
+        )
         logger.warning(
-            "Rapprochements : validation interactive impossible (stdin "
-            "n'est pas un terminal) — %d proposition(s) ignorée(s). "
-            "Utiliser --rapprochements-auto pour les appliquer.",
-            len(propositions),
+            "Rapprochements : validation interactive impossible (stdin n'est "
+            "pas un terminal) — %d proposition(s) NON appliquée(s) ; les "
+            "comptes N/N-1 resteront NON rapprochés (variations N vs N-1 "
+            "potentiellement faussées). Propositions : %s. Pour les "
+            "appliquer, relancer avec --rapprochements-auto, ou valider via "
+            "l'interface Streamlit.",
+            len(propositions), detail,
         )
         return []
 
@@ -382,7 +390,7 @@ def main() -> None:
     templates = None if args.no_templates else args.templates
 
     try:
-        run_pipeline(
+        resultats = run_pipeline(
             fec_path=args.fec,
             client=args.client,
             date_cloture=args.date_cloture,
@@ -396,6 +404,21 @@ def main() -> None:
             # fusion — la confirmation explicite reste obligatoire)
             rapprochements_interactif=not args.rapprochements_auto,
         )
+        # Signal explicite et actionnable si des rapprochements ont été
+        # proposés mais non appliqués (exécution non interactive). Aucune
+        # fusion n'est forcée — la pipeline a réussi, on alerte seulement.
+        proposes = resultats.get("rapprochements_proposes") or []
+        appliques = resultats.get("rapprochements_appliques") or []
+        if (proposes and not appliques and not args.rapprochements_auto
+                and not sys.stdin.isatty()):
+            print(
+                f"ATTENTION : {len(proposes)} rapprochement(s) de comptes "
+                f"N/N-1 proposé(s) mais AUCUN appliqué (exécution non "
+                f"interactive). Les variations N vs N-1 peuvent être "
+                f"faussées. Relancer avec --rapprochements-auto pour les "
+                f"appliquer, ou utiliser l'interface Streamlit.",
+                file=sys.stderr,
+            )
     except ValueError as exc:
         logger.error("Erreur bloquante : %s", exc)
         sys.exit(1)

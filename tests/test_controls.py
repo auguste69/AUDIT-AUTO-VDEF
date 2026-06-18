@@ -215,9 +215,11 @@ class TestEcrituresDimanche:
         df.loc[0, "EcritureDate"] = "20250105"  # dimanche 5 jan 2025
         res = _resultats_dict(run_all(df, DATE_CLOTURE))
         ok, detail, sev = res["Écritures un dimanche"]
-        assert ok is False
-        assert sev == "WARNING"
+        # Signal informatif : ne « échoue » jamais (activité 7j/7 légitime)
+        assert ok is True
+        assert sev == "INFO"
         assert "1" in detail
+        assert "dimanche" in detail.lower()
 
     def test_aucun_dimanche(self):
         df = _fec_minimal()
@@ -276,8 +278,11 @@ class TestBenford:
         df["Solde"] = df["Debit"] - df["Credit"]
         res = _resultats_dict(run_all(df, "31/12/2025", seuil_benford_mad=0.015))
         ok, detail, sev = res["Benford (1er chiffre)"]
-        assert ok is False
+        # Indicateur statistique : ok reste True (jamais en échec), le verdict
+        # d'écart est porté par le détail.
+        assert ok is True
         assert sev == "INFO"
+        assert "écart notable" in detail
 
     @necessite_gilac
     def test_champs_mad_chi2_dans_detail(self, fec_gilac):
