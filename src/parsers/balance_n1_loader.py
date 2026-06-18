@@ -117,7 +117,8 @@ def load_balance_n1(
     if suffix == ".xlsx":
         nom_feuille, mode = detect_balance_sheet(chemin)
 
-        if mode == "fm":
+        if mode == "fm" and nom_feuille == "Balance N Vs N-1":
+            # FM complet (onglet exactement nommé) : mapping + soldes
             logger.info("Source N-1 : FM existant — %s", path)
             mapping_fm = from_fm(chemin)
             balance_n1 = _extraire_soldes_from_fm(chemin, nom_feuille)
@@ -126,9 +127,13 @@ def load_balance_n1(
             )
             return balance_n1, mapping_fm
 
-        # Balance Excel simple : pas de mapping FM
-        logger.info("Source N-1 : Balance Excel simple — %s", path)
-        balance_n1 = from_balance_excel(chemin)
+        # Feuille "balance" détectée mais pas un FM complet (nom différent de
+        # "Balance N Vs N-1"), ou balance détectée par contenu — balance simple.
+        logger.info(
+            "Source N-1 : Balance Excel simple (feuille '%s') — %s",
+            nom_feuille, path,
+        )
+        balance_n1 = from_balance_excel(chemin, sheet_name=nom_feuille)
         logger.info(
             "Balance N-1 : %d comptes chargés depuis la balance Excel",
             len(balance_n1),
