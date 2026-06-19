@@ -1,0 +1,9 @@
+[server]
+maxUploadSize = 500          # Mo — FEC volumétriques jusqu'à ~50 Mo en pratique
+
+[theme]
+primaryColor     = "#2E75B6"
+backgroundColor  = "#FFFFFF"
+secondaryBackgroundColor = "#D6E8F7"
+textColor        = "#3D3D3D"
+font             = "sans serif"
