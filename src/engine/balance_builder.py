@@ -33,7 +33,9 @@ def build(df_fec: pd.DataFrame, balance_n1: Optional[BalanceN1] = None) -> pd.Da
     pd.DataFrame
         Colonnes : CompteNum, CompteLib, Debit, Credit, Solde,
                    Solde_KE, Solde_N1_KE, Var_KE, Var_PCT.
-        Trié par CompteNum.
+        Trié par CompteNum. Les comptes présents en N-1 mais soldés en N
+        (absents du FEC) figurent dans la balance avec des montants N à 0,
+        pour que la comparaison N vs N-1 soit exhaustive.
 
     Lève
     ----
@@ -44,10 +46,15 @@ def build(df_fec: pd.DataFrame, balance_n1: Optional[BalanceN1] = None) -> pd.Da
         balance_n1 = {}
 
     # --- Agrégation par compte ---
+    # Clé d'agrégation : CompteNum SEUL. Un même compte peut porter
+    # plusieurs libellés dans le FEC (renommage en cours d'exercice) :
+    # agréger sur (CompteNum, CompteLib) créerait des lignes en doublon
+    # et fausserait les totaux N-1. On retient le premier libellé.
     balance = (
         df_fec
-        .groupby(["CompteNum", "CompteLib"], as_index=False)
+        .groupby("CompteNum", as_index=False)
         .agg(
+            CompteLib=("CompteLib", "first"),
             Debit=("Debit", "sum"),
             Credit=("Credit", "sum"),
             Solde=("Solde", "sum"),
@@ -75,6 +82,34 @@ def build(df_fec: pd.DataFrame, balance_n1: Optional[BalanceN1] = None) -> pd.Da
     balance["Solde_N1_KE"] = balance["CompteNum"].map(
         lambda num: balance_n1.get(str(num), {}).get("solde_ke", 0.0)
     )
+
+    # --- Comptes N-1 soldés en N (absents du FEC) ---
+    # Sans ces lignes, la somme des soldes N-1 ne reboucle pas à 0 et les
+    # variations des comptes soldés (emprunt remboursé, stock liquidé…)
+    # disparaissent de la revue analytique.
+    nums_n = set(balance["CompteNum"].astype(str))
+    orphelins = [
+        {
+            "CompteNum": str(num),
+            "CompteLib": str((info or {}).get("libelle", "")),
+            "Debit": 0.0, "Credit": 0.0, "Solde": 0.0, "Solde_KE": 0.0,
+            "Solde_N1_KE": float((info or {}).get("solde_ke", 0.0)),
+        }
+        for num, info in balance_n1.items()
+        if str(num) not in nums_n
+        and abs(float((info or {}).get("solde_ke", 0.0))) >= 0.0005
+    ]
+    if orphelins:
+        logger.info(
+            "Balance comparative : %d compte(s) N-1 soldé(s) en N ajouté(s) "
+            "(somme N-1 = %.3f K€)",
+            len(orphelins), sum(o["Solde_N1_KE"] for o in orphelins),
+        )
+        balance = (
+            pd.concat([balance, pd.DataFrame(orphelins)], ignore_index=True)
+            .sort_values("CompteNum")
+            .reset_index(drop=True)
+        )
 
     # --- Variations ---
     balance["Var_KE"] = (balance["Solde_KE"] - balance["Solde_N1_KE"]).round(3)

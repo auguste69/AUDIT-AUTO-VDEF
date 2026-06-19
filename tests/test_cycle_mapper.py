@@ -20,6 +20,14 @@ FEC_PATH = DATA_DIR / "GILAC_2025_12_31_FEC.txt"
 FM_PATH  = DATA_DIR / "FM GILAC.xlsx"
 PCG_PATH = CONFIG_DIR / "mapping_pcg.yaml"
 
+# Seuls les tests utilisant le FEC/FM réels sont conditionnés : les tests
+# de résolution par préfixe (config YAML uniquement) tournent toujours.
+necessite_gilac = pytest.mark.skipif(
+    not FEC_PATH.exists() or not FM_PATH.exists(),
+    reason="Fichiers GILAC absents (données client retirées du dépôt — "
+           "couverture assurée par tests/test_pipeline_synthetique.py)",
+)
+
 # 29 nouveaux comptes 2025 absents du FM (à mapper via PCG)
 NOUVEAUX_COMPTES = [
     "106810", "231500", "401500", "401600", "409100",
@@ -67,6 +75,7 @@ def balance_mappee(balance, mapping_fm, pcg):
 # Tests : mapping_parser.from_fm
 # ---------------------------------------------------------------------------
 
+@necessite_gilac
 class TestFromFm:
 
     def test_nb_comptes_fm(self, mapping_fm):
@@ -74,7 +83,11 @@ class TestFromFm:
 
     def test_structure_entree(self, mapping_fm):
         info = mapping_fm["101300"]
-        assert set(info.keys()) == {"cycle", "etatfi", "compta", "ref"}
+        assert set(info.keys()) == {
+            "cycle", "ref",
+            "etatfi_n", "etatfi_n1", "compta_n", "compta_n1",
+            "etatfi", "compta",  # aliases historiques (= valeurs N)
+        }
 
     def test_valeurs_compte_connu(self, mapping_fm):
         info = mapping_fm["101300"]
@@ -201,11 +214,14 @@ class TestResolutionCompta:
 # Tests : map_cycles — bout en bout sur GILAC
 # ---------------------------------------------------------------------------
 
+@necessite_gilac
 class TestMapCycles:
 
     def test_shape(self, balance, balance_mappee):
         assert len(balance_mappee) == len(balance)
-        assert len(balance_mappee.columns) == len(balance.columns) + 4
+        # cycle, etatfi_n, etatfi_n1, compta_n, compta_n1, ref
+        # + aliases etatfi/compta = 8 colonnes ajoutées
+        assert len(balance_mappee.columns) == len(balance.columns) + 8
 
     def test_colonnes_ajoutees(self, balance_mappee):
         for col in ("cycle", "compta", "etatfi", "ref"):

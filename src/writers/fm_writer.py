@@ -4,21 +4,36 @@ Générateur de feuilles maîtresses FM_{client}_{annee}.xlsx.
 Onglets produits :
   1. Sommaire
   2. Balance N Vs N-1  (tous les comptes, valeurs brutes)
-  3. Tréso              (BFR, FRNG, TN — agrégé par poste)
-  4. AACE               (Autres Achats et Charges Externes — comptes 606-609, 61x, 62x)
-  5. Un onglet par cycle  (A0, V0, C Propres0, …)
+  3. Bilan              (Actif / Passif synthétiques côte à côte)
+  4. EBIT               (résultat d'exploitation, cerfa 2052)
+  5. Actif détaillé     (format liasse 2050)
+  6. Passif détaillé    (format liasse 2051)
+  7. P&L détaillé       (compte de résultat complet, cerfa 2052/2053)
+  8. Tréso              (BFR, FRNG, TN — agrégé par poste)
+  9. AACE               (Autres Achats et Charges Externes — comptes 606-609, 61x, 62x)
+ 10. Un onglet par cycle  (A0, V0, C Propres0, …)
      — sections ACTIF / PASSIF / CHARGES / PRODUITS (seulement si non vides)
      — convention de signe : PASSIF et PRODUITS sont présentés en positif (Solde × -1)
 """
 
 import logging
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
+from src.engine.financial_engine import (
+    calculer_actif_detaille, calculer_bilan, calculer_ebit,
+    calculer_passif_detaille, calculer_pl_detaille, calculer_treso,
+    filtrer_aace,
+)
+from src.engine.liasse_fiscale_loader import load_liasse_fiscale
+from src.writers.fm.actif_detaille import ecrire_actif_detaille_tab
+from src.writers.fm.ebit import ecrire_ebit_tab
+from src.writers.fm.passif_detaille import ecrire_passif_detaille_tab
+from src.writers.fm.pl_detaille import ecrire_pl_detaille_tab
 from src.writers.styles import (
     remove_gridlines, set_col_widths, write_title_block,
     write_header_row, write_data_row, write_section_label, write_total_row,
@@ -26,6 +41,10 @@ from src.writers.styles import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Chemin par défaut de la config PCG (fallback si write() est appelé sans
+# pcg_config — compatibilité avec les appels existants)
+_PCG_DEFAULT = Path(__file__).resolve().parent.parent / "config" / "mapping_pcg.yaml"
 
 # Ordre des sections dans les onglets cycle
 ORDRE_SECTIONS = ["Actif", "Passif", "Charges", "Produits"]
@@ -48,13 +67,6 @@ _WIDTHS_BILAN = {
     "H": 4,  "I": 30, "J": 4,  "K": 14, "L": 14, "M": 12, "N": 10,
 }
 
-# Préfixes de comptes à reclassement dynamique selon le signe du solde.
-# Ces comptes peuvent être actif ou passif selon l'exercice ou le client.
-_PREFIXES_BASCULE: tuple = (
-    "425", "443", "444", "451", "455", "456",
-    "467", "478", "486", "487", "509",
-)
-
 # Headers communs (colonnes A-J)
 _HEADERS_BASE = [
     (1, "Ref."),
@@ -64,9 +76,6 @@ _HEADERS_BASE = [
     (8, "Ref."),
     (10, "Cycle"),
 ]
-
-# Préfixes des comptes AACE (Autres Achats et Charges Externes)
-_PREFIXES_AACE = ("606", "607", "608", "609", "61", "62")
 
 
 def _date_str(date_cloture: str) -> str:
@@ -88,6 +97,11 @@ def _var_pct_val(var_pct) -> Union[float, str]:
 # ---------------------------------------------------------------------------
 
 def _ecrire_sommaire(ws, client: str, date_cloture: str, cycles: list) -> None:
+    # NB : la liste des feuilles maîtresses (rows 12-14) est statique — elle
+    # n'est pas générée depuis les onglets du classeur. Elle est figée par la
+    # fixture de régression cellulaire (tests/fixtures/FM_SYNTHETIQUE_REF.xlsx,
+    # régénérable via `python3 -m scripts.generer_fixture_fm`) : ne pas y
+    # insérer de ligne sans régénérer la fixture.
     remove_gridlines(ws)
     set_col_widths(ws, {"A": 4, "B": 30, "C": 50})
 
@@ -146,10 +160,12 @@ def _ecrire_balance_tab(ws, df: pd.DataFrame, date_n: str, date_n1: str,
                FONT_NORMAL),
             (8, r["ref"],             None,   FONT_META),
             (10, r["cycle"],          None,   FONT_META),
-            (11, r.get("etatfi", ""), None,  FONT_META),
-            (12, r.get("etatfi", ""), None,  FONT_META),
-            (13, r["compta"],         None,   FONT_META),
-            (14, r["compta"],         None,   FONT_META),
+            # 4 colonnes distinctes : un reclassement inter-exercices
+            # (ex. client devenu créditeur) doit rester visible.
+            (11, r.get("etatfi_n",  r.get("etatfi", "")), None, FONT_META),
+            (12, r.get("etatfi_n1", ""),                  None, FONT_META),
+            (13, r.get("compta_n",  r.get("compta", "")), None, FONT_META),
+            (14, r.get("compta_n1", ""),                  None, FONT_META),
         ]
         write_data_row(ws, current_row, cells)
         current_row += 1
@@ -159,181 +175,9 @@ def _ecrire_balance_tab(ws, df: pd.DataFrame, date_n: str, date_n1: str,
 # Onglet Bilan (Actif gauche / Passif droite)
 # ---------------------------------------------------------------------------
 
-def _classer_comptes_bascule(balance: pd.DataFrame) -> tuple:
-    """
-    Reclasse dynamiquement les comptes bascule (_PREFIXES_BASCULE) selon le
-    signe de leur Solde_KE / Solde_N1_KE.
-
-    Retourne ((actif_n, actif_n1), (passif_n, passif_n1)).
-    Convention passif : valeur positive (−Solde_KE pour les soldes créditeurs).
-    """
-    if "Solde_KE" not in balance.columns or "Solde_N1_KE" not in balance.columns:
-        raise ValueError(
-            "Bascule : colonnes 'Solde_KE' ou 'Solde_N1_KE' absentes de la balance — "
-            "vérifier que balance_builder.build() a bien été appelé."
-        )
-    masque = balance["CompteNum"].apply(
-        lambda n: any(str(n).startswith(p) for p in _PREFIXES_BASCULE)
-    )
-    df_b = balance.loc[masque]
-
-    actif_n   = round(float(df_b.loc[df_b["Solde_KE"]    > 0, "Solde_KE"].sum()),    3)
-    actif_n1  = round(float(df_b.loc[df_b["Solde_N1_KE"] > 0, "Solde_N1_KE"].sum()), 3)
-    passif_n  = round(-float(df_b.loc[df_b["Solde_KE"]    < 0, "Solde_KE"].sum()),   3)
-    passif_n1 = round(-float(df_b.loc[df_b["Solde_N1_KE"] < 0, "Solde_N1_KE"].sum()), 3)
-
-    logger.debug(
-        "Bascule : actif N=%.1f K€, passif N=%.1f K€ (%d comptes bascule)",
-        actif_n, passif_n, len(df_b),
-    )
-    return (actif_n, actif_n1), (passif_n, passif_n1)
-
-
-def _calc_bilan(balance: pd.DataFrame) -> dict:
-    """
-    Calcule les postes actif et passif du bilan synthétique pour N et N-1.
-
-    Convention :
-    - Actif : valeurs nettes (brut + amort, les amort ayant des Solde_KE négatifs)
-    - Passif : × -1 (comptes créditeurs → soldes négatifs → affichage positif)
-
-    Garantie universelle : un poste résiduel catch-all absorbe les comptes
-    non capturés pour assurer l'équilibre avec n'importe quel FEC.
-    """
-    def sp(prefixes, signe=1):
-        return (
-            round(_sommer_prefixes(balance, prefixes, "Solde_KE")    * signe, 3),
-            round(_sommer_prefixes(balance, prefixes, "Solde_N1_KE") * signe, 3),
-        )
-
-    def sp_si(prefixes, condition, signe=1):
-        return (
-            round(_sommer_prefixes_si(balance, prefixes, "Solde_KE",    condition) * signe, 3),
-            round(_sommer_prefixes_si(balance, prefixes, "Solde_N1_KE", condition) * signe, 3),
-        )
-
-    # --- ACTIF ---
-    # Les comptes d'amort/dép ont des Solde_KE négatifs — les additionner
-    # aux comptes bruts donne directement la valeur nette.
-    cap_non_appele = sp(["109"])
-    immo_incorp    = sp(["201","203","205","206","207","208","232","237",
-                         "280","290"])
-    immo_corp      = sp(["211","212","213","214","215","218","231","238",
-                         "281","291"])
-    immo_fi        = sp(["261","266","267","268","271","272","273","274","275","276",
-                         "277","296","297"])
-    stocks         = sp(["31","32","33","34","35","37","39"])
-    avances        = sp(["4091"])
-    crean_cli      = sp(["411","413","416","418","491"])
-    # Préfixes bascule (425, 444, 456, 467, 478) retirés — gérés par _classer_comptes_bascule
-    autres_crean   = sp(["4096","4097","4098","441","4456","462","465","471"])
-    # 486 (CCA) retiré — géré par _classer_comptes_bascule
-    # 451, 455 retirés — gérés par _classer_comptes_bascule
-    vmp            = sp(["50","590"])
-    dispo          = sp(["51","53"])
-
-    # --- PASSIF (× -1 car comptes créditeurs) ---
-    capital        = sp(["101","108"],                         signe=-1)
-    primes         = sp(["104"],                               signe=-1)
-    reserve_legale = sp(["1061"],                              signe=-1)
-    autres_res     = sp(["1062","1063","1064","1068"],          signe=-1)
-    report         = sp(["11"],                                signe=-1)
-    resultat       = sp(["12"],                                signe=-1)
-    subventions    = sp(["13"],                                signe=-1)
-    prov_regl      = sp(["14"],                                signe=-1)
-    prov_risques_b = sp(["151"],                               signe=-1)
-    prov_charges_b = sp(["152","153","154","155","156","157","158"], signe=-1)
-    emprunts       = sp(["16","17","519"],                     signe=-1)
-    det_fourn_b    = sp(["401","403","4081","4088"],            signe=-1)
-    # 444 retiré (double-comptage avec autres_crean) — géré par _classer_comptes_bascule
-    det_fisc_b     = sp(["421","422","423","424","427","428","43","442",
-                         "4455","4457","446","447","448","449","457"], signe=-1)
-    # 467, 478, 509 retirés — gérés par _classer_comptes_bascule
-    autres_dettes  = sp(["4191","404","405","4084","4196","4197","4198","464"], signe=-1)
-    # 487 (PCA) retiré — géré par _classer_comptes_bascule
-    # 451, 455 retirés — gérés par _classer_comptes_bascule
-    # Résultat en cours (classes 6 & 7 si exercice non clôturé / arrêté partiel)
-    resultat_encours = sp(["6","7"],                           signe=-1)
-
-    # --- Comptes bascule : reclassement dynamique selon le signe ---
-    bascule_actif, bascule_passif = _classer_comptes_bascule(balance)
-
-    # Sous-totaux interco affichés séparément (display only — déjà inclus dans bascule_actif/passif)
-    crean_interco           = sp_si(["451","455"], ">0")
-    dettes_interco          = sp_si(["451","455"], "<0", signe=-1)
-    bascule_reclasses_actif = (
-        round(bascule_actif[0]  - crean_interco[0],  3),
-        round(bascule_actif[1]  - crean_interco[1],  3),
-    )
-    bascule_reclasses_passif = (
-        round(bascule_passif[0] - dettes_interco[0], 3),
-        round(bascule_passif[1] - dettes_interco[1], 3),
-    )
-
-    # --- Totaux ---
-    total_actif = (
-        round(cap_non_appele[0] + immo_incorp[0] + immo_corp[0] + immo_fi[0]
-              + stocks[0] + avances[0] + crean_cli[0] + autres_crean[0]
-              + bascule_actif[0] + vmp[0] + dispo[0], 3),
-        round(cap_non_appele[1] + immo_incorp[1] + immo_corp[1] + immo_fi[1]
-              + stocks[1] + avances[1] + crean_cli[1] + autres_crean[1]
-              + bascule_actif[1] + vmp[1] + dispo[1], 3),
-    )
-    total_passif = (
-        round(capital[0] + primes[0] + reserve_legale[0] + autres_res[0]
-              + report[0] + resultat[0] + subventions[0] + prov_regl[0]
-              + prov_risques_b[0] + prov_charges_b[0] + emprunts[0]
-              + det_fourn_b[0] + det_fisc_b[0] + autres_dettes[0]
-              + bascule_passif[0] + resultat_encours[0], 3),
-        round(capital[1] + primes[1] + reserve_legale[1] + autres_res[1]
-              + report[1] + resultat[1] + subventions[1] + prov_regl[1]
-              + prov_risques_b[1] + prov_charges_b[1] + emprunts[1]
-              + det_fourn_b[1] + det_fisc_b[1] + autres_dettes[1]
-              + bascule_passif[1] + resultat_encours[1], 3),
-    )
-
-    # Diagnostic : log l'écart résiduel pour traçabilité
-    imbalance_n = round(total_actif[0] - total_passif[0], 3)
-    if abs(imbalance_n) > 0.1:
-        logger.warning(
-            "Bilan : résiduel actif/passif N = %.3f K€ "
-            "(comptes non capturés → vérifier mapping_pcg.yaml)", imbalance_n,
-        )
-
-    # Contrôle équilibre bilan
-    for annee_lbl, idx in [("N", 0), ("N-1", 1)]:
-        ecart = abs(total_actif[idx] - total_passif[idx])
-        if ecart > 0.01:
-            logger.warning(
-                "Bilan : Total Actif ≠ Total Passif en %s "
-                "(Actif=%.1f, Passif=%.1f, écart=%.3f K€)",
-                annee_lbl, total_actif[idx], total_passif[idx], ecart,
-            )
-
-    return dict(
-        cap_non_appele=cap_non_appele,
-        immo_incorp=immo_incorp, immo_corp=immo_corp, immo_fi=immo_fi,
-        stocks=stocks, avances=avances, crean_cli=crean_cli,
-        autres_crean=autres_crean,
-        crean_interco=crean_interco,
-        bascule_reclasses_actif=bascule_reclasses_actif,
-        vmp=vmp, dispo=dispo,
-        total_actif=total_actif,
-        capital=capital, primes=primes, reserve_legale=reserve_legale,
-        autres_res=autres_res, report=report, resultat=resultat,
-        subventions=subventions, prov_regl=prov_regl,
-        prov_risques_b=prov_risques_b, prov_charges_b=prov_charges_b,
-        emprunts=emprunts, det_fourn_b=det_fourn_b, det_fisc_b=det_fisc_b,
-        autres_dettes=autres_dettes,
-        dettes_interco=dettes_interco,
-        bascule_reclasses_passif=bascule_reclasses_passif,
-        resultat_encours=resultat_encours,
-        total_passif=total_passif,
-    )
-
-
 def _ecrire_bilan_tab(ws, balance: pd.DataFrame,
-                      date_n: str, date_n1: str, client: str) -> None:
+                      date_n: str, date_n1: str, client: str,
+                      liasse_fiscale: dict) -> None:
     """Écrit l'onglet Bilan — Actif à gauche (B-G), Passif à droite (I-N)."""
     remove_gridlines(ws)
     set_col_widths(ws, _WIDTHS_BILAN)
@@ -348,7 +192,7 @@ def _ecrire_bilan_tab(ws, balance: pd.DataFrame,
         (9, "PASSIF"), (11, date_n), (12, date_n1), (13, "Var. K€"), (14, "Var. %"),
     ])
 
-    d = _calc_bilan(balance)
+    d = calculer_bilan(balance, liasse_fiscale).as_dict()
 
     # Constructeurs de ligne (type, label, val_n, val_n1)
     def rs(label):      return ("s", label,     None,      None)
@@ -448,131 +292,12 @@ def _ecrire_bilan_tab(ws, balance: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
-# Helpers calcul Tréso (BFR / FRNG / TN)
-# ---------------------------------------------------------------------------
-
-def _sommer_prefixes(balance: pd.DataFrame, prefixes: list,
-                     colonne: str = "Solde_KE") -> float:
-    """Somme les valeurs de colonne pour tous les comptes commençant par un des préfixes."""
-    masque = balance["CompteNum"].apply(
-        lambda n: any(str(n).startswith(p) for p in prefixes)
-    )
-    return float(balance.loc[masque, colonne].sum())
-
-
-def _sommer_prefixes_si(balance: pd.DataFrame, prefixes: list,
-                         colonne: str, signe_cond: str) -> float:
-    """Somme avec filtre sur le signe de la valeur ('>0' ou '<0')."""
-    masque = balance["CompteNum"].apply(
-        lambda n: any(str(n).startswith(p) for p in prefixes)
-    )
-    if signe_cond == ">0":
-        masque = masque & (balance[colonne] > 0)
-    elif signe_cond == "<0":
-        masque = masque & (balance[colonne] < 0)
-    return float(balance.loc[masque, colonne].sum())
-
-
-def _calc_treso(balance: pd.DataFrame) -> dict:
-    """
-    Calcule tous les postes BFR/FRNG/TN pour N (Solde_KE) et N-1 (Solde_N1_KE).
-
-    Retourne un dict {nom_poste: (val_n, val_n1)}.
-    """
-    def sp(prefixes, signe=1):
-        """Somme simple × signe pour N et N-1."""
-        return (
-            round(_sommer_prefixes(balance, prefixes, "Solde_KE")    * signe, 3),
-            round(_sommer_prefixes(balance, prefixes, "Solde_N1_KE") * signe, 3),
-        )
-
-    def sp_si(prefixes, cond, signe=1):
-        """Somme conditionnelle × signe pour N et N-1."""
-        return (
-            round(_sommer_prefixes_si(balance, prefixes, "Solde_KE",    cond) * signe, 3),
-            round(_sommer_prefixes_si(balance, prefixes, "Solde_N1_KE", cond) * signe, 3),
-        )
-
-    def add(*postes):
-        """Additionne plusieurs tuples (val_n, val_n1)."""
-        return (round(sum(p[0] for p in postes), 3),
-                round(sum(p[1] for p in postes), 3))
-
-    # --- Ressources stables (× -1 car passif/créditeur) ---
-    cap_propres  = sp(["10", "11", "12", "13", "14"], signe=-1)
-    amort_dep    = sp(["28", "29", "39", "49"],        signe=-1)
-    prov_risques = sp(["15"],                           signe=-1)
-    dettes_mlt   = sp(["16", "17"],                    signe=-1)
-    total_res    = add(cap_propres, amort_dep, prov_risques, dettes_mlt)
-
-    # --- Emplois stables (positif car actif/débiteur) ---
-    actif_immo = sp(["20", "21", "22", "23", "24", "25", "26", "27"])
-    total_emp  = actif_immo
-
-    # --- FRNG ---
-    frng = (round(total_res[0] - total_emp[0], 3),
-            round(total_res[1] - total_emp[1], 3))
-
-    # --- Actif circulant d'exploitation ---
-    stocks       = sp(["31", "32", "33", "34", "35", "37"])
-    crean_cli    = sp(["411", "413", "416", "418"])
-    autres_crean = sp_si(["40", "44", "46", "47"], ">0")
-    cca          = sp(["486"])
-    total_ac     = add(stocks, crean_cli, autres_crean, cca)
-
-    # --- Passif circulant d'exploitation (× -1 pour affichage positif) ---
-    det_fourn  = sp(["401", "403", "408"], signe=-1)
-    det_fisc   = sp_si(["42", "43", "44"], "<0", signe=-1)
-    autres_det = sp_si(["46", "47"],       "<0", signe=-1)
-    pca        = sp(["487"], signe=-1)
-    total_pc   = add(det_fourn, det_fisc, autres_det, pca)
-
-    # --- BFR ---
-    bfr = (round(total_ac[0] - total_pc[0], 3),
-           round(total_ac[1] - total_pc[1], 3))
-
-    # --- TN ---
-    tn = (round(frng[0] - bfr[0], 3),
-          round(frng[1] - bfr[1], 3))
-
-    # --- Vérification TN (trésorerie directe) ---
-    treso_active   = sp_si(["50", "51", "53"], ">0")
-    treso_pass_519 = sp(["519"], signe=-1)
-    treso_pass_512 = sp_si(["512"], "<0", signe=-1)
-    treso_passive  = (round(treso_pass_519[0] + treso_pass_512[0], 3),
-                      round(treso_pass_519[1] + treso_pass_512[1], 3))
-    tn_verif = (round(treso_active[0] - treso_passive[0], 3),
-                round(treso_active[1] - treso_passive[1], 3))
-
-    # Contrôle cohérence fondamentale FRNG = BFR + TN
-    for annee_lbl, idx in [("N", 0), ("N-1", 1)]:
-        ecart = abs(frng[idx] - (bfr[idx] + tn[idx]))
-        if ecart > 0.01:
-            logger.warning(
-                "Tréso : FRNG ≠ BFR + TN en %s "
-                "(FRNG=%.1f, BFR=%.1f, TN=%.1f, écart=%.3f K€)",
-                annee_lbl, frng[idx], bfr[idx], tn[idx], ecart,
-            )
-
-    return dict(
-        cap_propres=cap_propres, amort_dep=amort_dep,
-        prov_risques=prov_risques, dettes_mlt=dettes_mlt, total_res=total_res,
-        actif_immo=actif_immo, total_emp=total_emp, frng=frng,
-        stocks=stocks, crean_cli=crean_cli, autres_crean=autres_crean,
-        cca=cca, total_ac=total_ac,
-        det_fourn=det_fourn, det_fisc=det_fisc, autres_det=autres_det,
-        pca=pca, total_pc=total_pc,
-        bfr=bfr, tn=tn,
-        treso_active=treso_active, treso_passive=treso_passive, tn_verif=tn_verif,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Onglet Tréso
 # ---------------------------------------------------------------------------
 
 def _ecrire_treso_tab(ws, balance: pd.DataFrame,
-                      date_n: str, date_n1: str, client: str) -> None:
+                      date_n: str, date_n1: str, client: str,
+                      liasse_fiscale: dict) -> None:
     """Écrit l'onglet Tréso — BFR, FRNG, Trésorerie nette."""
     remove_gridlines(ws)
     set_col_widths(ws, _WIDTHS_TRESO)
@@ -592,7 +317,7 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
         (6, "Var. K€"), (7, "Var. %"),
     ])
 
-    t   = _calc_treso(balance)
+    t   = calculer_treso(balance, liasse_fiscale).as_dict()
     row = [10]  # liste pour mutation dans les closures
 
     def _var(vn, vn1):
@@ -637,6 +362,7 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
     section("FONDS DE ROULEMENT NET GLOBAL (FRNG)")
     section("Ressources stables")
     poste("Capitaux propres (10–14)",                         t["cap_propres"])
+    poste("Résultat de l'exercice en cours (classes 6–7)",    t["resultat_enc"])
     poste("Amortissements et dépréciations (28, 29, 39, 49)", t["amort_dep"])
     poste("Provisions pour risques et charges (15)",          t["prov_risques"])
     poste("Dettes financières MLT (16, 17)",                  t["dettes_mlt"])
@@ -651,18 +377,18 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
 
     # ---- BFR --------------------------------------------------------
     section("BESOIN EN FONDS DE ROULEMENT (BFR)")
-    section("Actif circulant d'exploitation")
-    poste("Stocks bruts (31–37)",                                    t["stocks"])
-    poste("Créances clients (411, 413, 416, 418)",                   t["crean_cli"])
-    poste("Autres créances d'exploitation (40, 44, 46, 47 > 0)",    t["autres_crean"])
-    poste("Charges constatées d'avance — CCA (486)",                 t["cca"])
+    section("Actif circulant")
+    poste("Stocks bruts (30–38)",                                    t["stocks"])
+    poste("Créances clients (41 > 0)",                               t["crean_cli"])
+    poste("Autres créances (40, 42–47 > 0)",                         t["autres_crean"])
+    poste("Comptes de régularisation actif — CCA (48 > 0)",          t["cca"])
     sous_total("= Total actif circulant",                            t["total_ac"])
     blank()
-    section("Passif circulant d'exploitation")
-    poste("Dettes fournisseurs (401, 403, 408)",                     t["det_fourn"])
+    section("Passif circulant")
+    poste("Dettes fournisseurs (40 < 0)",                            t["det_fourn"])
     poste("Dettes fiscales et sociales (42, 43, 44 < 0)",            t["det_fisc"])
-    poste("Autres dettes d'exploitation (46, 47 < 0)",               t["autres_det"])
-    poste("Produits constatés d'avance — PCA (487)",                 t["pca"])
+    poste("Autres dettes (41, 45, 46, 47 < 0)",                      t["autres_det"])
+    poste("Comptes de régularisation passif — PCA (48 < 0)",         t["pca"])
     sous_total("= Total passif circulant",                           t["total_pc"])
     blank()
     sous_total("= BFR",                                              t["bfr"])
@@ -674,9 +400,12 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
 
     # ---- Vérification -----------------------------------------------
     section("Vérification — trésorerie directe")
-    poste("Trésorerie active (50, 51, 53 > 0)",      t["treso_active"])
-    poste("Trésorerie passive (519 + 512 < 0)",      t["treso_passive"])
+    poste("Trésorerie active (classe 5 > 0)",        t["treso_active"])
+    poste("Trésorerie passive (classe 5 < 0)",       t["treso_passive"])
     sous_total("= TN (vérification directe)",        t["tn_verif"])
+    ecart = (round(t["tn"][0] - t["tn_verif"][0], 3),
+             round(t["tn"][1] - t["tn_verif"][1], 3))
+    poste("Écart de cohérence (TN − vérification)",  ecart)
 
     logger.info(
         "Tréso : onglet généré (FRNG=%.0f, BFR=%.0f, TN=%.0f K€)",
@@ -687,14 +416,6 @@ def _ecrire_treso_tab(ws, balance: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # Onglet AACE
 # ---------------------------------------------------------------------------
-
-def _filtrer_aace(balance_mappee: pd.DataFrame) -> pd.DataFrame:
-    """Retourne les lignes dont CompteNum commence par un préfixe AACE, triées."""
-    masque = balance_mappee["CompteNum"].astype(str).apply(
-        lambda n: n.startswith(_PREFIXES_AACE)
-    )
-    return balance_mappee[masque].sort_values("CompteNum").reset_index(drop=True)
-
 
 def _ecrire_aace_tab(ws, df_aace: pd.DataFrame,
                      date_n: str, date_n1: str, client: str) -> None:
@@ -849,6 +570,7 @@ def write(
     client: str,
     date_cloture: str,
     output_path: Union[str, Path],
+    pcg_config: Optional[dict] = None,
 ) -> Path:
     """
     Génère le fichier FM_{client}_{annee}.xlsx.
@@ -856,19 +578,37 @@ def write(
     Paramètres
     ----------
     balance_mappee : pd.DataFrame
-        Produit par cycle_mapper.map_cycles() — colonnes standard + cycle/compta/etatfi/ref.
+        Produit par cycle_mapper.map_cycles() — colonnes standard +
+        cycle/etatfi_n/etatfi_n1/compta_n/compta_n1/ref (et les aliases
+        etatfi/compta).
     client : str
         Nom du client (ex: "GILAC").
     date_cloture : str
         Date de clôture au format 'JJ/MM/AAAA' (ex: '31/12/2025').
     output_path : str ou Path
         Dossier de sortie.
+    pcg_config : dict, optionnel
+        Config PCG produite par mapping_parser.from_pcg_config() — fournit la
+        section liasse_fiscale (préfixes Bilan/Tréso/AACE). Si None, la config
+        par défaut (src/config/mapping_pcg.yaml) est chargée.
 
     Retourne
     --------
     Path
         Chemin complet du fichier généré.
     """
+    if pcg_config is None:
+        from src.parsers.mapping_parser import from_pcg_config
+        logger.debug(
+            "write : pcg_config non fourni — chargement de la config par "
+            "défaut %s", _PCG_DEFAULT,
+        )
+        pcg_config = from_pcg_config(_PCG_DEFAULT)
+    # load_liasse_fiscale fournit aussi les sections ebit, pl_detaille et
+    # les structures actif/passif détaillés (pass-through, validation
+    # déléguée aux fonctions calculer_* de financial_engine).
+    liasse_fiscale = load_liasse_fiscale(pcg_config)
+
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -909,15 +649,39 @@ def write(
 
     # --- Bilan ---
     ws_bilan = wb.create_sheet("Bilan")
-    _ecrire_bilan_tab(ws_bilan, balance_mappee, date_n, date_n1, client)
+    _ecrire_bilan_tab(ws_bilan, balance_mappee, date_n, date_n1, client,
+                      liasse_fiscale)
+
+    # --- EBIT (entre Bilan et Actif détaillé) ---
+    ws_ebit = wb.create_sheet("EBIT")
+    ebit = calculer_ebit(balance_mappee, liasse_fiscale)
+    ecrire_ebit_tab(ws_ebit, ebit, date_n, date_n1, client)
+
+    # --- Actif détaillé (cerfa 2050) ---
+    ws_actif = wb.create_sheet("Actif détaillé")
+    actif_detaille = calculer_actif_detaille(balance_mappee, liasse_fiscale)
+    ecrire_actif_detaille_tab(ws_actif, actif_detaille, date_n, date_n1,
+                              client)
+
+    # --- Passif détaillé (cerfa 2051) ---
+    ws_passif = wb.create_sheet("Passif détaillé")
+    passif_detaille = calculer_passif_detaille(balance_mappee, liasse_fiscale)
+    ecrire_passif_detaille_tab(ws_passif, passif_detaille, date_n, date_n1,
+                               client)
+
+    # --- P&L détaillé (cerfa 2052/2053) ---
+    ws_pl = wb.create_sheet("P&L détaillé")
+    pl_detaille = calculer_pl_detaille(balance_mappee, liasse_fiscale)
+    ecrire_pl_detaille_tab(ws_pl, pl_detaille, date_n, date_n1, client)
 
     # --- Tréso ---
     ws_treso = wb.create_sheet("Tréso")
-    _ecrire_treso_tab(ws_treso, balance_mappee, date_n, date_n1, client)
+    _ecrire_treso_tab(ws_treso, balance_mappee, date_n, date_n1, client,
+                      liasse_fiscale)
 
     # --- AACE ---
     ws_aace = wb.create_sheet("AACE")
-    df_aace = _filtrer_aace(balance_mappee)
+    df_aace = filtrer_aace(balance_mappee, liasse_fiscale)
     _ecrire_aace_tab(ws_aace, df_aace, date_n, date_n1, client)
 
     # --- Onglets par cycle ---

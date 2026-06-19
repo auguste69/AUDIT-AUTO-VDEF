@@ -23,6 +23,11 @@ from src.writers.styles import (
 
 logger = logging.getLogger(__name__)
 
+# Capacité maximale d'une feuille Excel (lignes). Les lignes 1-4 sont
+# réservées au titre et aux en-têtes ; au-delà, le FEC est exporté en CSV.
+_EXCEL_MAX_ROWS = 1_048_576
+_FEC_MAX_DATA_ROWS = _EXCEL_MAX_ROWS - 4
+
 # Colonnes FEC dans l'ordre réglementaire + Solde calculé
 _COLONNES_FEC = [
     "JournalCode", "JournalLib", "EcritureNum", "EcritureDate",
@@ -58,8 +63,28 @@ _WIDTHS_BN1 = {
 # Onglet FEC N
 # ---------------------------------------------------------------------------
 
-def _ecrire_fec(ws, df_fec: pd.DataFrame, client: str, date_cloture: str) -> None:
-    """Écrit le FEC brut complet dans la feuille ws."""
+def _ecrire_fec(
+    ws,
+    df_fec: pd.DataFrame,
+    client: str,
+    date_cloture: str,
+    dossier: Path,
+    annee: int,
+) -> None:
+    """
+    Écrit le FEC brut complet dans la feuille ws.
+
+    Performance : un FEC peut compter des centaines de milliers de lignes
+    (≈ 6 M cellules). Seul l'en-tête est stylé ; les cellules de données sont
+    écrites sans police ni bordure et via itertuples (≈ 10× plus rapide
+    qu'iterrows). On évite ainsi le coût d'application d'un style sur des
+    millions de cellules — Design A ne s'applique qu'aux états (FM/Balance),
+    pas au copier-coller brut du FEC.
+
+    Scalabilité : si le FEC dépasse la capacité d'une feuille Excel
+    (1 048 576 lignes), il est exporté en CSV compagnon FEC_{client}_{annee}.csv
+    et l'onglet ne contient qu'un renvoi vers ce fichier.
+    """
     remove_gridlines(ws)
     set_col_widths(ws, _WIDTHS_FEC)
 
@@ -72,24 +97,46 @@ def _ecrire_fec(ws, df_fec: pd.DataFrame, client: str, date_cloture: str) -> Non
     headers = [(i + 1, col) for i, col in enumerate(colonnes_disponibles)]
     write_header_row(ws, row=4, headers=headers)
 
-    # Données (à partir de la ligne 5)
-    df_export = df_fec[colonnes_disponibles].copy()
+    df_export = df_fec[colonnes_disponibles]
     nb_lignes = len(df_export)
     logger.info("FEC N : écriture de %d lignes", nb_lignes)
 
-    for i, (_, row_data) in enumerate(df_export.iterrows()):
-        row_excel = 5 + i
-        cells = []
-        for j, col in enumerate(colonnes_disponibles):
-            valeur = row_data[col]
-            # Convertir NaN en None pour éviter des artefacts Excel
-            if pd.isna(valeur) if not isinstance(valeur, str) else False:
-                valeur = None
-            fmt = None
-            if col in ("Debit", "Credit", "Solde", "Montantdevise"):
-                fmt = "#,##0.00"
-            cells.append((j + 1, valeur, fmt))
-        write_data_row(ws, row=row_excel, cells=cells)
+    # Garde-fou capacité Excel : au-delà, export CSV compagnon + renvoi.
+    if nb_lignes > _FEC_MAX_DATA_ROWS:
+        csv_path = dossier / f"FEC_{client}_{annee}.csv"
+        df_export.to_csv(csv_path, sep=";", index=False, encoding="utf-8-sig")
+        logger.warning(
+            "FEC trop volumineux pour Excel (%d lignes > %d) — export CSV "
+            "compagnon : %s ; l'onglet 'FEC N' ne contient qu'un renvoi.",
+            nb_lignes, _FEC_MAX_DATA_ROWS, csv_path.name,
+        )
+        ws.cell(
+            row=5, column=1,
+            value=(f"FEC trop volumineux pour Excel ({nb_lignes:,} lignes). "
+                   f"Voir le fichier compagnon : {csv_path.name}"),
+        ).font = FONT_NORMAL
+        return
+
+    # Index des colonnes numériques (format appliqué cellule par cellule mais
+    # SANS police ni bordure — le coût dominant des styles est ainsi évité).
+    cols_num = {
+        j for j, col in enumerate(colonnes_disponibles)
+        if col in ("Debit", "Credit", "Solde", "Montantdevise")
+    }
+
+    # NaN -> None vectorisé une seule fois, puis itertuples.
+    records = (
+        df_export.astype(object)
+        .where(pd.notna(df_export), None)
+        .itertuples(index=False, name=None)
+    )
+    row_excel = 4  # la première ligne de données sera la 5
+    for rec in records:
+        row_excel += 1
+        for j, valeur in enumerate(rec):
+            c = ws.cell(row=row_excel, column=j + 1, value=valeur)
+            if j in cols_num and valeur is not None:
+                c.number_format = "#,##0.00"
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +282,7 @@ def write(
 
     # --- Onglet 1 : FEC N ---
     ws_fec = wb.create_sheet("FEC N")
-    _ecrire_fec(ws_fec, df_fec, client, date_cloture)
+    _ecrire_fec(ws_fec, df_fec, client, date_cloture, dossier, annee)
 
     # --- Onglet 2 : Balance N ---
     ws_bn = wb.create_sheet("Balance N")

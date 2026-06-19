@@ -20,7 +20,9 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Type canonique du mapping : {compte_num_str: {cycle, etatfi, compta}}
+# Type canonique du mapping :
+# {compte_num_str: {cycle, etatfi_n, etatfi_n1, compta_n, compta_n1,
+#                   etatfi (alias de etatfi_n), compta (alias de compta_n), ref}}
 MappingCompte = Dict[str, Dict[str, str]]
 
 
@@ -30,10 +32,16 @@ def from_fm(path: Union[str, Path]) -> MappingCompte:
 
     Structure de l'onglet (headers en ligne 8, données à partir de ligne 10) :
       col B (index 1) : CompteNum
-      col H (index 7) : Ref cycle  (ex: "C Propres0")
-      col J (index 9) : Cycle      (ex: "C Propres", "A")
-      col K (index 10): EtatFi N   (ex: "Capital social")
-      col M (index 12): ComptaN    (ex: "Passif", "Actif")
+      col H (index 7) : Ref cycle   (ex: "C Propres0")
+      col J (index 9) : Cycle       (ex: "C Propres", "A")
+      col K (index 10): EtatFi N    (ex: "Capital social")
+      col L (index 11): EtatFi N-1  (peut différer de EtatFi N — reclassement)
+      col M (index 12): ComptaN     (ex: "Passif", "Actif")
+      col N (index 13): ComptaN-1   (peut différer de ComptaN — reclassement)
+
+    Le dict retourné contient les clés distinctes etatfi_n / etatfi_n1 /
+    compta_n / compta_n1, plus les aliases historiques etatfi (= etatfi_n)
+    et compta (= compta_n) pour ne casser aucun consommateur existant.
     """
     chemin = Path(path)
     if not chemin.exists():
@@ -56,19 +64,26 @@ def from_fm(path: Union[str, Path]) -> MappingCompte:
         except (ValueError, TypeError):
             continue
 
-        cycle  = str(row[9]).strip()  if row[9]  is not None else ""
-        etatfi = str(row[10]).strip() if row[10] is not None else ""
-        compta = str(row[12]).strip() if row[12] is not None else ""
-        ref    = str(row[7]).strip()  if row[7]  is not None else ""
+        cycle     = str(row[9]).strip()  if row[9]  is not None else ""
+        etatfi_n  = str(row[10]).strip() if row[10] is not None else ""
+        etatfi_n1 = str(row[11]).strip() if row[11] is not None else ""
+        compta_n  = str(row[12]).strip() if row[12] is not None else ""
+        compta_n1 = str(row[13]).strip() if row[13] is not None else ""
+        ref       = str(row[7]).strip()  if row[7]  is not None else ""
 
         if not cycle:
             continue
 
         mapping[compte_num] = {
-            "cycle":  cycle,
-            "etatfi": etatfi,
-            "compta": compta,
-            "ref":    ref,
+            "cycle":     cycle,
+            "etatfi_n":  etatfi_n,
+            "etatfi_n1": etatfi_n1,
+            "compta_n":  compta_n,
+            "compta_n1": compta_n1,
+            # Aliases historiques (consommateurs existants)
+            "etatfi":    etatfi_n,
+            "compta":    compta_n,
+            "ref":       ref,
         }
 
     logger.info("FM '%s' : %d comptes chargés", chemin.name, len(mapping))
@@ -86,6 +101,14 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
       ordre_cycles    : list[str]
       noms_cycles     : dict {code: nom_long}
       seuils          : dict
+      templates       : dict {nom_template: cycle}
+      liasse_fiscale  : dict — section brute du YAML (préfixes des états
+                        financiers Bilan/Tréso/AACE/EBIT/P&L), validée par
+                        src.engine.liasse_fiscale_loader.load_liasse_fiscale
+      actif_detaille_structure  : dict — structure de présentation de
+                        l'Actif détaillé (cerfa 2050, racine du YAML)
+      passif_detaille_structure : dict — structure de présentation du
+                        Passif détaillé (cerfa 2051, racine du YAML)
     """
     chemin = Path(path)
     if not chemin.exists():
@@ -129,6 +152,15 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
         "noms_cycles":     config.get("noms_cycles", {}),
         "seuils":          config.get("seuils", {}),
         "templates":       templates,
+        "liasse_fiscale":  config.get("liasse_fiscale") or {},
+        # Structures de présentation des états détaillés (racine du YAML,
+        # cerfa 2050/2051) — consommées via load_liasse_fiscale
+        "actif_detaille_structure":  config.get("actif_detaille_structure") or {},
+        "passif_detaille_structure": config.get("passif_detaille_structure") or {},
+        # Feuilles FM à insérer dans chaque template (P1)
+        "integration_templates": config.get("integration_templates") or {},
+        # Paramètres du rapprochement de comptes N/N-1 (P6)
+        "rapprochements": config.get("rapprochements") or {},
     }
 
 
@@ -139,12 +171,20 @@ def from_pcg_config(path: Union[str, Path]) -> dict:
 BalanceN1Dict = Dict[str, Dict[str, Union[str, float]]]
 
 
-def from_balance_excel(path: Union[str, Path]) -> BalanceN1Dict:
+def from_balance_excel(
+    path: Union[str, Path],
+    sheet_name: Union[str, int] = 0,
+) -> BalanceN1Dict:
     """
     Lit un fichier Excel balance simple avec colonnes CompteNum, CompteLib, Solde (en €).
 
     La recherche des colonnes est insensible à la casse et aux espaces.
     Le solde est converti de € en K€ (÷ 1000).
+
+    Paramètres
+    ----------
+    sheet_name : str | int
+        Nom ou index de l'onglet à lire (0 = premier onglet par défaut).
 
     Retourne
     --------
@@ -161,7 +201,7 @@ def from_balance_excel(path: Union[str, Path]) -> BalanceN1Dict:
     if not chemin.exists():
         raise FileNotFoundError(f"Balance Excel introuvable : {chemin}")
 
-    df = pd.read_excel(chemin, dtype=str)
+    df = pd.read_excel(chemin, dtype=str, sheet_name=sheet_name)
 
     # Normaliser les noms de colonnes pour la recherche flexible
     col_map: Dict[str, str] = {str(c).strip().lower(): c for c in df.columns}

@@ -13,9 +13,18 @@ Severity :
 import logging
 import math
 from collections import Counter
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
+
+# Import engine → engine uniquement (jamais src/writers/)
+from src.engine.financial_engine import (
+    calculer_actif_detaille,
+    calculer_bilan,
+    calculer_passif_detaille,
+    calculer_pl_detaille,
+    calculer_treso,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +47,19 @@ def run_all(
     date_cloture: str,
     seuil_montant_rond: float = 10_000.0,
     seuil_benford_mad: float = 0.015,
+    balance_mappee: Optional[pd.DataFrame] = None,
+    liasse_config: Optional[dict] = None,
+    seuil_equilibre_bilan_ke: float = 1.0,
+    bilan_non_bloquant: bool = False,
 ) -> List[ResultatControle]:
     """
     Exécute tous les contrôles d'intégrité sur le FEC.
+
+    Si balance_mappee ET liasse_config sont fournis, les contrôles
+    financiers supplémentaires sont exécutés (équilibre du bilan AC-1,
+    cohérence du résultat, cohérence des états détaillés, cohérence du
+    résultat net P&L). Sinon, seuls les 9 contrôles FEC historiques
+    sont exécutés (rétrocompatibilité totale).
 
     Paramètres
     ----------
@@ -52,6 +71,15 @@ def run_all(
         Seuil en € au-dessus duquel un montant rond est signalé (défaut : 10 000).
     seuil_benford_mad : float
         Seuil du MAD Benford au-dessus duquel la distribution est anormale (défaut : 0.015).
+    balance_mappee : pd.DataFrame, optionnel
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE) — active
+        les contrôles financiers AC-1 et cohérence du résultat.
+    liasse_config : dict, optionnel
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_equilibre_bilan_ke : float
+        Seuil de tolérance de l'écart Actif/Passif en K€ (défaut : 1.0 K€).
+    bilan_non_bloquant : bool
+        Si True, le contrôle AC-1 est rétrogradé en WARNING (jamais bloquant).
 
     Retourne
     --------
@@ -88,6 +116,83 @@ def run_all(
         except Exception as exc:  # noqa: BLE001
             logger.error("Erreur dans le contrôle %s : %s", controle.__name__, exc)
             resultats.append((controle.__name__, False, f"Erreur inattendue : {exc}", "BLOQUANT"))
+
+    # Contrôles financiers (AC-1 + cohérence résultat) — uniquement si la
+    # balance mappée et la config liasse sont disponibles. Si l'un des deux
+    # est None, le comportement historique (9 contrôles) est inchangé.
+    if balance_mappee is not None and liasse_config is not None:
+        resultats.extend(
+            run_controles_financiers(
+                balance_mappee,
+                liasse_config,
+                seuil_equilibre_bilan_ke=seuil_equilibre_bilan_ke,
+                bilan_non_bloquant=bilan_non_bloquant,
+            )
+        )
+
+    return resultats
+
+
+def run_controles_financiers(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_equilibre_bilan_ke: float = 1.0,
+    bilan_non_bloquant: bool = False,
+) -> List[ResultatControle]:
+    """
+    Exécute les contrôles financiers sur la balance mappée :
+    AC-1 (équilibre du bilan) et cohérence du résultat.
+
+    Appelable séparément de run_all() : dans le pipeline, les 9 contrôles
+    FEC tournent avant la construction de la balance, alors que ces deux
+    contrôles nécessitent la balance mappée (disponible après map_cycles).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_equilibre_bilan_ke : float
+        Seuil de tolérance de l'écart Actif/Passif en K€ (défaut : 1.0 K€).
+    bilan_non_bloquant : bool
+        Si True, AC-1 est rétrogradé en WARNING.
+
+    Retourne
+    --------
+    list[tuple[str, bool, str, str]]
+        Liste de (nom_controle, ok, detail, severity) — 5 éléments
+        (AC-1, cohérence du résultat, cohérence des états détaillés,
+        cohérence du résultat net P&L, cohérence Tréso).
+    """
+    resultats: List[ResultatControle] = []
+
+    controles = [
+        (_ctrl_bilan_equilibre, "WARNING" if bilan_non_bloquant else "BLOQUANT"),
+        (_ctrl_coherence_resultat, "WARNING"),
+        (_ctrl_coherence_actif_detaille, "WARNING"),
+        (_ctrl_coherence_pl_resultat, "WARNING"),
+        (_ctrl_coherence_treso, "WARNING"),
+    ]
+    for controle, severity_erreur in controles:
+        try:
+            res = controle(
+                balance_mappee,
+                liasse_config,
+                seuil_equilibre_bilan_ke=seuil_equilibre_bilan_ke,
+                bilan_non_bloquant=bilan_non_bloquant,
+            )
+            resultats.append(res)
+            statut = "OK" if res[1] else "KO"
+            logger.info("[%s] %s — %s", statut, res[0], res[2].split("\n")[0])
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Erreur dans le contrôle %s : %s", controle.__name__, exc)
+            resultats.append((
+                controle.__name__,
+                False,
+                f"Erreur inattendue lors du contrôle financier : {exc}",
+                severity_erreur,
+            ))
 
     return resultats
 
@@ -159,16 +264,25 @@ def _ctrl_ecritures_dimanche(
     df: pd.DataFrame,
     **_,
 ) -> ResultatControle:
-    """Signale les écritures dont EcritureDate tombe un dimanche."""
+    """
+    Signale les écritures dont EcritureDate tombe un dimanche.
+
+    Signal purement informatif : une activité 7j/7 (hôtellerie, santé,
+    commerce) passe légitimement des milliers d'écritures le dimanche. Le
+    contrôle n'« échoue » donc jamais (ok=True, INFO) ; il rapporte le nombre
+    et la part du FEC concernés pour examen, à recouper avec le secteur.
+    """
+    total = len(df)
     dates = pd.to_datetime(df["EcritureDate"], format="%Y%m%d", errors="coerce")
-    dimanches = (dates.dt.dayofweek == 6).sum()
-    ok = bool(dimanches == 0)
+    dimanches = int((dates.dt.dayofweek == 6).sum())
+    ratio = (dimanches / total) if total else 0.0
     detail = (
-        f"{dimanches} écriture(s) passée(s) un dimanche"
+        f"{dimanches} écriture(s) un dimanche ({ratio:.1%} du FEC) — "
+        f"normal pour une activité 7j/7, à recouper avec le secteur"
         if dimanches
         else "Aucune écriture un dimanche"
     )
-    return ("Écritures un dimanche", ok, detail, "WARNING")
+    return ("Écritures un dimanche", True, detail, "INFO")
 
 
 def _ctrl_montants_ronds(
@@ -193,19 +307,63 @@ def _ctrl_montants_ronds(
     return ("Montants ronds", ok, detail, "INFO")
 
 
-def _ctrl_doublons(df: pd.DataFrame, **_) -> ResultatControle:
-    """Détecte les doublons potentiels : même journal, numéro, compte, montants et libellé."""
-    cles = ["JournalCode", "EcritureNum", "CompteNum", "Debit", "Credit", "EcritureLib"]
+# Ratio de lignes en doublon au-dessus duquel le contrôle est signalé (KO).
+# Un FEC volumétrique (caisse/POS, agrégation journalière) contient
+# légitimement des lignes identiques ; on ne signale que si la proportion
+# dépasse ce seuil — exprimé en ratio pour rester valable du micro au
+# multi-millions de lignes.
+SEUIL_DOUBLONS_RATIO = 0.05  # 5 % des lignes
+
+
+def _ctrl_doublons(
+    df: pd.DataFrame,
+    seuil_doublons_ratio: float = SEUIL_DOUBLONS_RATIO,
+    **_,
+) -> ResultatControle:
+    """
+    Détecte les doublons potentiels.
+
+    Clé enrichie : un vrai doublon exige l'identité sur le journal, le numéro
+    d'écriture, la date d'écriture, la pièce (réf. + date), le compte, les
+    montants ET le libellé. Sur un FEC volumétrique (caisse/POS, agrégation
+    journalière), des lignes structurellement identiques d'un jour ou d'une
+    pièce à l'autre ne sont PAS des doublons : enrichir la clé avec les dates
+    et la référence de pièce élimine ces faux positifs.
+
+    Verdict : OK tant que le ratio de lignes en doublon reste sous
+    seuil_doublons_ratio (défaut 5 %). On rapporte un ratio et un échantillon
+    plafonné plutôt qu'un comptage brut, pour rester exploitable quelle que
+    soit la taille du FEC.
+    """
+    # On n'inclut une colonne dans la clé que si elle est présente
+    # (rétrocompatibilité avec des FEC partiels).
+    cles_souhaitees = [
+        "JournalCode", "EcritureNum", "EcritureDate",
+        "PieceRef", "PieceDate", "CompteNum",
+        "Debit", "Credit", "EcritureLib",
+    ]
+    cles = [c for c in cles_souhaitees if c in df.columns]
+
+    total = len(df)
     masque = df.duplicated(subset=cles, keep=False)
     nb_lignes = int(masque.sum())
-    # Nombre de groupes distincts en doublon
     nb_groupes = df[masque].groupby(cles).ngroups if nb_lignes else 0
-    ok = bool(nb_lignes == 0)
-    detail = (
-        f"{nb_lignes} ligne(s) en doublon potentiel ({nb_groupes} groupe(s) distincts)"
-        if nb_lignes
-        else "Aucun doublon potentiel détecté"
-    )
+    ratio = (nb_lignes / total) if total else 0.0
+    ok = bool(ratio <= seuil_doublons_ratio)
+
+    if nb_lignes == 0:
+        detail = "Aucun doublon potentiel détecté"
+    else:
+        # Échantillon plafonné : tailles des 5 plus gros groupes, sans dumper
+        # des dizaines de milliers de lignes dans le rapport.
+        tailles = df[masque].groupby(cles).size().sort_values(ascending=False)
+        echantillon = "  ".join(f"{int(n)}×" for n in tailles.head(5).tolist())
+        detail = (
+            f"{nb_lignes} ligne(s) en doublon potentiel "
+            f"({ratio:.1%} du FEC, {nb_groupes} groupe(s)) — "
+            f"clé : {'+'.join(cles)} — top groupes : {echantillon} "
+            f"(seuil d'alerte : {seuil_doublons_ratio:.0%})"
+        )
     return ("Doublons potentiels", ok, detail, "WARNING")
 
 
@@ -229,10 +387,13 @@ def _ctrl_benford(
     if len(vals) == 0:
         return ("Benford", True, "Aucun montant à analyser", "INFO")
 
-    # Premier chiffre significatif
+    # Premier chiffre significatif. On retire en tête les zéros ET le point
+    # décimal : sans cela, un montant < 0,10 € (ex. 0.05 → "0.0500000000")
+    # garde un "0" après la virgule et serait écarté à tort, alors que son
+    # premier chiffre significatif est 5.
     premiers: List[int] = []
     for v in vals:
-        s = f"{abs(v):.10f}".lstrip("0").replace(".", "")
+        s = f"{abs(v):.10f}".lstrip("0.").replace(".", "")
         if s:
             d = int(s[0])
             if 1 <= d <= 9:
@@ -255,16 +416,21 @@ def _ctrl_benford(
         for d in range(1, 10)
     )
 
-    ok = bool(mad <= seuil_benford_mad)
+    # Benford est un INDICATEUR statistique, pas un test binaire de validité.
+    # Sur de gros volumes (prix de caisse récurrents), le MAD dépasse
+    # naturellement le seuil sans qu'il y ait fraude. On garde donc ok=True
+    # (jamais en échec) et on porte le verdict statistique dans le détail.
+    conforme = mad <= seuil_benford_mad
+    verdict = "conforme" if conforme else "écart notable (à interpréter)"
     distribution = "  ".join(
         f"{d}:{obs_freq[d]:.3f}(att:{BENFORD_ATTENDU[d]:.3f})"
         for d in range(1, 10)
     )
     detail = (
-        f"MAD={mad:.4f} (seuil={seuil_benford_mad}) — χ²={chi2:.2f} — "
-        f"n={total:,} montants\n  {distribution}"
+        f"MAD={mad:.4f} (seuil indicatif={seuil_benford_mad}, {verdict}) — "
+        f"χ²={chi2:.2f} — n={total:,} montants\n  {distribution}"
     )
-    return ("Benford (1er chiffre)", ok, detail, "INFO")
+    return ("Benford (1er chiffre)", True, detail, "INFO")
 
 
 def _ctrl_ecritures_tardives(
@@ -309,3 +475,303 @@ def _ctrl_ecritures_tardives(
         else f"Aucune écriture tardive (seuil : {seuil.strftime('%d/%m/%Y')})"
     )
     return ("Écritures tardives", ok, detail, "WARNING")
+
+
+# =============================================================================
+# Contrôles financiers (sur la balance mappée)
+# =============================================================================
+
+def _ctrl_bilan_equilibre(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_equilibre_bilan_ke: float = 1.0,
+    bilan_non_bloquant: bool = False,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle AC-1 : équilibre du bilan (Total Actif = Total Passif).
+
+    BLOQUANT uniquement sur l'écart N : |Total Actif N − Total Passif N|
+    doit être ≤ seuil_equilibre_bilan_ke (défaut : 1.0 K€).
+
+    L'écart N-1 est contrôlé en WARNING uniquement (jamais bloquant) :
+    les données N-1 proviennent du FM historique du client et peuvent
+    porter un écart non corrigeable.
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_equilibre_bilan_ke : float
+        Seuil de tolérance de l'écart en K€ (défaut : 1.0 K€).
+    bilan_non_bloquant : bool
+        Si True, la sévérité du contrôle devient WARNING.
+    """
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    actif_n, actif_n1 = bilan.total_actif.as_tuple()
+    passif_n, passif_n1 = bilan.total_passif.as_tuple()
+
+    ecart_n = abs(actif_n - passif_n)
+    ecart_n1 = abs(actif_n1 - passif_n1)
+
+    ok = bool(ecart_n <= seuil_equilibre_bilan_ke)
+    severity = "WARNING" if bilan_non_bloquant else "BLOQUANT"
+
+    detail = (
+        f"Bilan N : Actif={actif_n:,.1f} K€ / Passif={passif_n:,.1f} K€ — "
+        f"écart={ecart_n:.3f} K€ (seuil : {seuil_equilibre_bilan_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — le bilan de l'exercice N est déséquilibré : vérifier le FEC "
+            "et le mapping des comptes (mapping_pcg.yaml)."
+        )
+
+    if ecart_n1 > seuil_equilibre_bilan_ke:
+        msg_n1 = (
+            f"WARNING N-1 : écart Actif/Passif = {ecart_n1:.3f} K€ "
+            f"(Actif={actif_n1:,.1f} K€ / Passif={passif_n1:,.1f} K€) — "
+            f"non bloquant, données issues du FM historique du client."
+        )
+        detail += "\n  " + msg_n1
+        logger.warning("Équilibre du bilan (AC-1) — %s", msg_n1)
+
+    return ("Équilibre du bilan (AC-1)", ok, detail, severity)
+
+
+def _ctrl_coherence_resultat(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_resultat_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence du résultat (WARNING, jamais bloquant).
+
+    Vérifie que le résultat comptable déduit de la balance
+    (− somme des soldes des classes 6 et 7) est cohérent avec le poste
+    résultat du bilan (comptes 12x + résultat en cours classes 6/7),
+    avec une tolérance de 1 K€.
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_resultat_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    # Résultat déduit de la balance : − (somme classes 6 et 7)
+    masque_67 = balance_mappee["CompteNum"].astype(str).str.startswith(("6", "7"))
+    resultat_balance = -float(balance_mappee.loc[masque_67, "Solde_KE"].sum())
+
+    # Poste résultat du bilan : compte 12x + résultat en cours (classes 6/7)
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    resultat_bilan = (
+        bilan.postes["resultat"].valeur_n
+        + bilan.postes["resultat_encours"].valeur_n
+    )
+
+    ecart = abs(resultat_balance - resultat_bilan)
+    ok = bool(ecart <= seuil_coherence_resultat_ke)
+
+    detail = (
+        f"Résultat déduit de la balance (− classes 6/7) = {resultat_balance:,.1f} K€ / "
+        f"poste résultat du bilan (12x + résultat en cours) = {resultat_bilan:,.1f} K€ — "
+        f"écart={ecart:.3f} K€ (tolérance : {seuil_coherence_resultat_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : le résultat de l'exercice ne correspond pas "
+            "entre la balance et le bilan (résultat déjà affecté en 12x ou "
+            "mapping incomplet)."
+        )
+
+    return ("Cohérence du résultat", ok, detail, "WARNING")
+
+
+def _ctrl_coherence_actif_detaille(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_detaille_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence des états détaillés (WARNING, jamais bloquant).
+
+    Vérifie que les totaux de l'Actif détaillé et du Passif détaillé
+    (cerfa 2050/2051) coïncident avec les totaux du bilan synthétique,
+    avec une tolérance de 1 K€ : un écart signale une partition incomplète
+    des structures actif/passif détaillés du mapping_pcg.yaml.
+
+    Si les structures sont absentes de la config (YAML antérieur au
+    prompt 10), le contrôle est marqué non exécuté (INFO, ok=True).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_detaille_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    nom = "Cohérence des états détaillés"
+    if not (liasse_config.get("actif_detaille_structure") or {}).get("sections") \
+            or not (liasse_config.get("passif_detaille_structure") or {}).get("sections"):
+        return (
+            nom, True,
+            "Contrôle non exécuté : structures actif/passif détaillés "
+            "absentes de la config PCG (mapping_pcg.yaml).",
+            "INFO",
+        )
+
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    actif = calculer_actif_detaille(balance_mappee, liasse_config)
+    passif = calculer_passif_detaille(balance_mappee, liasse_config)
+
+    ecart_actif = abs(actif.total.valeur_n - bilan.total_actif.valeur_n)
+    ecart_passif = abs(passif.total.valeur_n - bilan.total_passif.valeur_n)
+    ok = bool(ecart_actif <= seuil_coherence_detaille_ke
+              and ecart_passif <= seuil_coherence_detaille_ke)
+
+    detail = (
+        f"Actif détaillé N = {actif.total.valeur_n:,.1f} K€ / bilan = "
+        f"{bilan.total_actif.valeur_n:,.1f} K€ (écart={ecart_actif:.3f} K€) — "
+        f"Passif détaillé N = {passif.total.valeur_n:,.1f} K€ / bilan = "
+        f"{bilan.total_passif.valeur_n:,.1f} K€ (écart={ecart_passif:.3f} K€) "
+        f"— tolérance : {seuil_coherence_detaille_ke:.1f} K€"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : la partition des états détaillés ne couvre pas "
+            "les mêmes comptes que le bilan synthétique (vérifier "
+            "actif_detaille_structure / passif_detaille_structure dans "
+            "mapping_pcg.yaml)."
+        )
+
+    return (nom, ok, detail, "WARNING")
+
+
+def _ctrl_coherence_pl_resultat(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_resultat_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence du résultat net P&L (WARNING, jamais bloquant).
+
+    Vérifie que le résultat net du P&L détaillé (cerfa 2052/2053) coïncide
+    avec le poste résultat du bilan (comptes 12x + résultat en cours
+    classes 6/7), avec une tolérance de 1 K€.
+
+    Si les sections ebit/pl_detaille sont absentes de la config (YAML
+    antérieur aux prompts 9-10), le contrôle est marqué non exécuté
+    (INFO, ok=True).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_resultat_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    nom = "Cohérence du résultat net (P&L)"
+    if not liasse_config.get("ebit") or not liasse_config.get("pl_detaille"):
+        return (
+            nom, True,
+            "Contrôle non exécuté : sections ebit/pl_detaille absentes de "
+            "la config PCG (mapping_pcg.yaml).",
+            "INFO",
+        )
+
+    pl = calculer_pl_detaille(balance_mappee, liasse_config)
+
+    bilan = calculer_bilan(balance_mappee, liasse_config)
+    resultat_bilan = (
+        bilan.postes["resultat"].valeur_n
+        + bilan.postes["resultat_encours"].valeur_n
+    )
+
+    ecart = abs(pl.resultat_net.valeur_n - resultat_bilan)
+    ok = bool(ecart <= seuil_coherence_resultat_ke)
+
+    detail = (
+        f"Résultat net du P&L détaillé = {pl.resultat_net.valeur_n:,.1f} K€ / "
+        f"poste résultat du bilan (12x + résultat en cours) = "
+        f"{resultat_bilan:,.1f} K€ — écart={ecart:.3f} K€ "
+        f"(tolérance : {seuil_coherence_resultat_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : le résultat net du compte de résultat ne "
+            "correspond pas au résultat porté au bilan (résultat déjà "
+            "affecté en 12x ou mapping incomplet)."
+        )
+
+    return (nom, ok, detail, "WARNING")
+
+
+def _ctrl_coherence_treso(
+    balance_mappee: pd.DataFrame,
+    liasse_config: dict,
+    seuil_coherence_treso_ke: float = 1.0,
+    **_,
+) -> ResultatControle:
+    """
+    Contrôle de cohérence de la Tréso (WARNING, jamais bloquant).
+
+    Vérifie que la trésorerie nette issue de l'approche bilancielle
+    (TN = FRNG − BFR) retombe sur la trésorerie directe (classe 5,
+    partitionnée par signe), avec une tolérance de 1 K€ sur N.
+
+    Un écart signifie que des comptes ne sont capturés par aucune rubrique
+    Tréso (ou par plusieurs) — voir la section liasse_fiscale.treso du
+    mapping_pcg.yaml. L'écart N-1 est signalé dans le détail sans faire
+    échouer le contrôle (données issues du FM historique du client).
+
+    Paramètres
+    ----------
+    balance_mappee : pd.DataFrame
+        Balance mappée (colonnes CompteNum, Solde_KE, Solde_N1_KE).
+    liasse_config : dict
+        Section liasse_fiscale chargée par load_liasse_fiscale().
+    seuil_coherence_treso_ke : float
+        Tolérance de l'écart en K€ (défaut : 1.0 K€).
+    """
+    treso = calculer_treso(balance_mappee, liasse_config)
+    tn_n, tn_n1 = treso.tn.as_tuple()
+    verif_n, verif_n1 = treso.postes["tn_verif"].as_tuple()
+
+    ecart_n = abs(tn_n - verif_n)
+    ecart_n1 = abs(tn_n1 - verif_n1)
+    ok = bool(ecart_n <= seuil_coherence_treso_ke)
+
+    detail = (
+        f"TN (FRNG − BFR) = {tn_n:,.1f} K€ / trésorerie directe "
+        f"(classe 5) = {verif_n:,.1f} K€ — écart={ecart_n:.3f} K€ "
+        f"(tolérance : {seuil_coherence_treso_ke:.1f} K€)"
+    )
+    if not ok:
+        detail += (
+            " — incohérence : des comptes ne sont capturés par aucune "
+            "rubrique Tréso (ou par plusieurs) — vérifier la section "
+            "liasse_fiscale.treso du mapping_pcg.yaml."
+        )
+    if ecart_n1 > seuil_coherence_treso_ke:
+        msg_n1 = (
+            f"WARNING N-1 : écart TN/trésorerie directe = {ecart_n1:.3f} K€ "
+            f"(TN={tn_n1:,.1f} K€ / vérification={verif_n1:,.1f} K€) — "
+            f"non bloquant, données issues du FM historique du client."
+        )
+        detail += "\n  " + msg_n1
+        logger.warning("Cohérence Tréso — %s", msg_n1)
+
+    return ("Cohérence Tréso (TN vs trésorerie directe)", ok, detail,
+            "WARNING")

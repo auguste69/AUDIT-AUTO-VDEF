@@ -97,8 +97,11 @@ def parse(source: Union[str, Path]) -> pd.DataFrame:
     # Nettoyer les noms de colonnes (BOM résiduel, espaces)
     df.columns = df.columns.str.strip().str.replace("\ufeff", "", regex=False)
 
-    # Nettoyer les valeurs string : strip + suppression des retours chariot Windows
-    colonnes_str = df.select_dtypes("object").columns
+    # Nettoyer les valeurs string : strip + suppression des retours chariot Windows.
+    # On inclut "object" (pandas 2.x) ET "str" (nouveau dtype par défaut en
+    # pandas 3.0+) : sans "str", les colonnes texte ne seraient plus captées en
+    # pandas 4 (la rétro-compatibilité object↔str y est supprimée).
+    colonnes_str = df.select_dtypes(include=["object", "str"]).columns
     df[colonnes_str] = df[colonnes_str].apply(
         lambda col: col.str.strip().str.replace("\r", "", regex=False)
     )

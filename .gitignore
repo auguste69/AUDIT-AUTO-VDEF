@@ -3,6 +3,10 @@ __pycache__/
 *.pyo
 .DS_Store
 output/
+output_*/
 .pytest_cache/
+
+# Données client confidentielles + répertoires de travail d'audit (jamais commités)
+data/_*/
 scripts/.run_state.json
 scripts/run_log.md

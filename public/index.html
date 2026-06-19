@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audit Automation — AVIZEO</title>
+  <style>
+    :root {
+      --bleu: #2E75B6;
+      --bleu-fonce: #1B4F7A;
+      --bleu-clair: #D6E8F7;
+      --gris: #3D3D3D;
+      --gris-2: #808080;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--gris);
+      background: linear-gradient(160deg, var(--bleu-clair) 0%, #ffffff 55%);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--bleu-fonce);
+      color: #fff;
+      padding: 28px 32px;
+    }
+    header .brand { font-size: 22px; font-weight: bold; letter-spacing: .5px; }
+    header .baseline { font-size: 13px; opacity: .85; margin-top: 4px; }
+    main {
+      flex: 1;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    h1 { color: var(--bleu-fonce); font-size: 28px; margin: 0 0 8px; }
+    .sub { color: var(--gris-2); font-size: 15px; margin: 0 0 32px; }
+    .card {
+      background: #fff;
+      border: 1px solid var(--bleu-clair);
+      border-radius: 10px;
+      padding: 24px 28px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(27, 79, 122, .06);
+    }
+    .card h2 { color: var(--bleu); font-size: 17px; margin: 0 0 12px; }
+    code {
+      background: #f3f6fa;
+      border: 1px solid #e2eaf3;
+      border-radius: 5px;
+      padding: 2px 7px;
+      font-size: 13px;
+      color: var(--bleu-fonce);
+    }
+    pre {
+      background: #f3f6fa;
+      border: 1px solid #e2eaf3;
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 6px; }
+    footer {
+      text-align: center;
+      color: var(--gris-2);
+      font-size: 12px;
+      padding: 24px;
+    }
+    .note {
+      border-left: 4px solid var(--bleu);
+      background: var(--bleu-clair);
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">AVIZEO</div>
+    <div class="baseline">Expert-comptable &amp; plus encore</div>
+  </header>
+
+  <main>
+    <h1>Audit Automation</h1>
+    <p class="sub">Pipeline d'automatisation des feuilles maîtresses d'audit à partir d'un FEC.</p>
+
+    <div class="card">
+      <h2>À propos</h2>
+      <p>
+        Cette application transforme un Fichier des Écritures Comptables (FEC)
+        en feuilles maîtresses, balance comparative N&nbsp;/&nbsp;N-1 et feuilles
+        de travail par cycle d'audit — automatiquement, pour n'importe quel
+        client disposant d'un FEC français.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Lancer l'application</h2>
+      <p>L'interface est une application Streamlit (serveur interactif). Elle se lance ainsi&nbsp;:</p>
+      <pre>pip install -r requirements.txt
+python3 -m streamlit run app.py</pre>
+      <p>Ou via la ligne de commande&nbsp;:</p>
+      <pre>python3 main.py FEC.txt --client NOM --date-cloture 31/12/2025 \
+  --n1-fm FM_N-1.xlsx --templates data/templates/ --output output/</pre>
+    </div>
+
+    <div class="card">
+      <h2 style="color:var(--bleu-fonce)">Hébergement</h2>
+      <div class="note">
+        Streamlit nécessite un serveur applicatif persistant et ne peut pas
+        s'exécuter en fonction <em>serverless</em> Vercel. Cette page statique
+        sert de page de présentation. Pour héberger l'application interactive,
+        utilisez une plateforme adaptée aux serveurs longue durée
+        (Streamlit Community Cloud, Render, Railway, Hugging Face Spaces ou un
+        serveur interne via Docker).
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    AVIZEO — Rhône-Alpes · Audit Automation
+  </footer>
+</body>
+</html>
