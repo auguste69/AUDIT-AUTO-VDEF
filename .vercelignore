@@ -1,0 +1,16 @@
+# Vercel ne sert qu'une page statique (public/). On exclut tout le code
+# Python pour empêcher la détection automatique d'une « app » serverless
+# (Streamlit ne peut pas tourner en fonction serverless Vercel).
+*.py
+app.py
+main.py
+src/
+tests/
+scripts/
+data/
+output/
+output_*/
+__pycache__/
+.pytest_cache/
+*.zip
+requirements.txt
